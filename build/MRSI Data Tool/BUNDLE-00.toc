@@ -1,0 +1,4 @@
+([('MRSI Data Tool',
+   '/Users/iparvez/Development/Projects/MRSI/MRSI_excel_transformer/dist/MRSI '
+   'Data Tool',
+   'EXECUTABLE')],)
