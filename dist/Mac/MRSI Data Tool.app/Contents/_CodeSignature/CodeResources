@@ -838,7 +838,35 @@
 		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		pyGUatBoia1NtSuGSmZ5MnPWC74=
+		5gwSm01RsLJvLk+N05VM7SMX4g4=
+		</data>
+		<key>Resources/cryptography-46.0.1.dist-info/INSTALLER</key>
+		<data>
+		16AxQdXWseiLa1nvCLZoHfISxZk=
+		</data>
+		<key>Resources/cryptography-46.0.1.dist-info/METADATA</key>
+		<data>
+		OJqOLI0WhS37BlVXpj86PdF+UXs=
+		</data>
+		<key>Resources/cryptography-46.0.1.dist-info/RECORD</key>
+		<data>
+		EKxlwqPN6ekuRe6EmneHwaTmUZI=
+		</data>
+		<key>Resources/cryptography-46.0.1.dist-info/WHEEL</key>
+		<data>
+		N68IRyMUCQnM24ptJIQ9BXZBYUk=
+		</data>
+		<key>Resources/cryptography-46.0.1.dist-info/licenses/LICENSE</key>
+		<data>
+		5EIEDCbNdtG5RoIsrykBGlH3XW0=
+		</data>
+		<key>Resources/cryptography-46.0.1.dist-info/licenses/LICENSE.APACHE</key>
+		<data>
+		3jPq0r7mQ1JUTOCqnkEMDET999k=
+		</data>
+		<key>Resources/cryptography-46.0.1.dist-info/licenses/LICENSE.BSD</key>
+		<data>
+		6ltBLAnzspuh2BphuHjFwW/+adg=
 		</data>
 		<key>Resources/dateutil/zoneinfo/dateutil-zoneinfo.tar.gz</key>
 		<data>
@@ -8008,6 +8036,42 @@
 		<data>
 		Oe25P0njjBxwq96tEHYAGUwVWR8=
 		</data>
+		<key>Resources/lxml/isoschematron/resources/rng/iso-schematron.rng</key>
+		<data>
+		Go1op5prM1pmBGPMmbTo7uFqB6E=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/RNG2Schtrn.xsl</key>
+		<data>
+		gw8JUVGbfoiM4PnGl4RuYCHn/sA=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/XSD2Schtrn.xsl</key>
+		<data>
+		+27UKlCTWg5312vRXldA7ijU6zI=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_abstract_expand.xsl</key>
+		<data>
+		47+62eTQoIRbDwHznw46HeAk23A=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_dsdl_include.xsl</key>
+		<data>
+		OGl2iT6BakNol6cYdYs6u/JoaeE=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_message.xsl</key>
+		<data>
+		JnOKlPhxa+9BjjlodWBP5w4YSI0=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_skeleton_for_xslt1.xsl</key>
+		<data>
+		QekDoEjBN2P/f6ofaCbqkTKe9ms=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_svrl_for_xslt1.xsl</key>
+		<data>
+		0b3cqpseVdF8eLWXy1wcOB5WjeY=
+		</data>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/readme.txt</key>
+		<data>
+		70CMM3nNaMhY+q1Fr/J9H9teBhk=
+		</data>
 		<key>Resources/pandas/io/formats/templates/html.tpl</key>
 		<data>
 		/nM8iuPbfdZyQWKQSirCZVN8B1c=
@@ -10834,6 +10898,15 @@
 			<key>symlink</key>
 			<string>../Resources/_tk_data</string>
 		</dict>
+		<key>Frameworks/aem/ae.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			lhoWptj0/m0WveBqlXuJEURj3z4=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"961a16a6d8f4fe6d16bde06a957b89114463df3e"</string>
+		</dict>
 		<key>Frameworks/base_library.zip</key>
 		<dict>
 			<key>symlink</key>
@@ -10856,6 +10929,20 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"ccbc7ceda67c979377c0b924accf9648d24a6836"</string>
+		</dict>
+		<key>Frameworks/cryptography-46.0.1.dist-info</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/cryptography-46.0.1.dist-info</string>
+		</dict>
+		<key>Frameworks/cryptography/hazmat/bindings/_rust.abi3.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			ehrylhlcZPKHAOY5kqrFMD3LjoE=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"7a1af296195c64f28700e63992aac5303dcb8e81"</string>
 		</dict>
 		<key>Frameworks/dateutil</key>
 		<dict>
@@ -10984,6 +11071,74 @@
 		<dict>
 			<key>symlink</key>
 			<string>zmq/.dylibs/libzmq.5.dylib</string>
+		</dict>
+		<key>Frameworks/lxml/_elementpath.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			ElExer0Oif39T/CcoD9vooNm9G4=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"1251317abd0e89fdfd4ff09ca03f6fa28366f46e"</string>
+		</dict>
+		<key>Frameworks/lxml/builder.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			XGHK13LiR0nNmuoSqLvS+vDqV2E=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"5c61cad772e24749cd9aea12a8bbd2faf0ea5761"</string>
+		</dict>
+		<key>Frameworks/lxml/etree.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			H2/eqCs0QcZipJkgNA4CfqP0TAo=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"1f6fdea82b3441c662a49920340e027ea3f44c0a"</string>
+		</dict>
+		<key>Frameworks/lxml/html/_difflib.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			CxeTXvGMI6n5I+zFbVYjRyRe6kw=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"0b17935ef18c23a9f923ecc56d562347245eea4c"</string>
+		</dict>
+		<key>Frameworks/lxml/html/diff.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			Gt2wa/vAH5n5dtze81PaoDMzDy4=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"1addb06bfbc01f99f976dcdef353daa033330f2e"</string>
+		</dict>
+		<key>Frameworks/lxml/isoschematron</key>
+		<dict>
+			<key>symlink</key>
+			<string>../../Resources/lxml/isoschematron</string>
+		</dict>
+		<key>Frameworks/lxml/objectify.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			+BkcvoTjkiIqAy8PH4qxaCrXuZw=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"f8191cbe84e392222a032f0f1f8ab1682ad7b99c"</string>
+		</dict>
+		<key>Frameworks/lxml/sax.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			oVT22s3oB3MvdCqVlNc57K8vjmM=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"a154f6dacde807732f742a9594d739ecaf2f8e63"</string>
 		</dict>
 		<key>Frameworks/markupsafe/_speedups.cpython-313-darwin.so</key>
 		<dict>
@@ -12076,6 +12231,15 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"28a3c422a3c69758e3c2af4318711bd19696f819"</string>
+		</dict>
+		<key>Frameworks/xlwings/xlwingslib.cpython-313-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			O7nud0MX2qItcVgeVqRe5awaqE0=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"3bb9ee774317daa22d71581e56a45ee5ac1aa84d"</string>
 		</dict>
 		<key>Frameworks/yaml/_yaml.cpython-313-darwin.so</key>
 		<dict>
@@ -13604,17 +13768,76 @@
 			IdJZTIMZ8UxHoPC/PSrKvMgsmrjYSmT6PLYIx+dfWcM=
 			</data>
 		</dict>
+		<key>Resources/aem</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Frameworks/aem</string>
+		</dict>
 		<key>Resources/base_library.zip</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			iwYQ2uo0gn7TpICiqfgOwczeK0lLnA9Y/x5nNgS2DxM=
+			cagYon2jB3xqiGMX6MQrh8B5zYj06Hzy0IYObCf809U=
 			</data>
 		</dict>
 		<key>Resources/charset_normalizer</key>
 		<dict>
 			<key>symlink</key>
 			<string>../Frameworks/charset_normalizer</string>
+		</dict>
+		<key>Resources/cryptography</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Frameworks/cryptography</string>
+		</dict>
+		<key>Resources/cryptography-46.0.1.dist-info/INSTALLER</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			zuuue4knoyJ+UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg=
+			</data>
+		</dict>
+		<key>Resources/cryptography-46.0.1.dist-info/METADATA</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			blc/XtipFQaho3ZqLK2qdwuNo+EyFtR1LR2DFFMgCac=
+			</data>
+		</dict>
+		<key>Resources/cryptography-46.0.1.dist-info/RECORD</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			hwr/DE/MBWN8ZeLjvHz1pui4JQtfKgtE2lc9sa1c4RU=
+			</data>
+		</dict>
+		<key>Resources/cryptography-46.0.1.dist-info/WHEEL</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			vDyXGwAe/QBpYw+jD8eU+EbjMjQEXHzUZDoiosetxRI=
+			</data>
+		</dict>
+		<key>Resources/cryptography-46.0.1.dist-info/licenses/LICENSE</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Pgx8CRqUi4JTO6mP18u0BDLW8amsv4X1ki0vmak65rs=
+			</data>
+		</dict>
+		<key>Resources/cryptography-46.0.1.dist-info/licenses/LICENSE.APACHE</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			qsc7MUj20dcRHbyjIJn2jSbGRMaBOuHk8F9leaomY/4=
+			</data>
+		</dict>
+		<key>Resources/cryptography-46.0.1.dist-info/licenses/LICENSE.BSD</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			YCxMdILeZHndLpeTzaJ15eY9dz2s0eymiSMqtwCPtPs=
+			</data>
 		</dict>
 		<key>Resources/dateutil/zoneinfo/dateutil-zoneinfo.tar.gz</key>
 		<dict>
@@ -26270,6 +26493,99 @@
 			<key>symlink</key>
 			<string>zmq/.dylibs/libzmq.5.dylib</string>
 		</dict>
+		<key>Resources/lxml/_elementpath.cpython-313-darwin.so</key>
+		<dict>
+			<key>symlink</key>
+			<string>../../Frameworks/lxml/_elementpath.cpython-313-darwin.so</string>
+		</dict>
+		<key>Resources/lxml/builder.cpython-313-darwin.so</key>
+		<dict>
+			<key>symlink</key>
+			<string>../../Frameworks/lxml/builder.cpython-313-darwin.so</string>
+		</dict>
+		<key>Resources/lxml/etree.cpython-313-darwin.so</key>
+		<dict>
+			<key>symlink</key>
+			<string>../../Frameworks/lxml/etree.cpython-313-darwin.so</string>
+		</dict>
+		<key>Resources/lxml/html</key>
+		<dict>
+			<key>symlink</key>
+			<string>../../Frameworks/lxml/html</string>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/rng/iso-schematron.rng</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			VsWxPyi3iViJDDbjJJw0wWkEHkLrz9zoCA8zJLor9N4=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/RNG2Schtrn.xsl</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ObebsB8Wt+d3uIA/U5NU85TpnQ3PxPX38TdOAqosMac=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/XSD2Schtrn.xsl</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			QweRrIIM+zFcgg98GXA2CaWfIbgVE0XKEeYSfvv67A0=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_abstract_expand.xsl</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			xSZ/Ekq/I+62ZpiE5AqYYHwFW/qh855zt9V4/s7rbkY=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_dsdl_include.xsl</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			x42QJ+dxQ1waPzydsCoQnp2Xj15y53nW43O7BuoDRHk=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_message.xsl</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Tr9BnO6pzjVWwhqJfm10UlvAy95EgfSCz2iMlrVGT6Q=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_skeleton_for_xslt1.xsl</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ue8q/88X4e/jsJizo31GRNBxNhdxkEE9fY20oq0Iqwk=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_svrl_for_xslt1.xsl</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			BBAdsVSi5zAzeGepuN6gS1saQINDqITXKplmmj4dTWg=
+			</data>
+		</dict>
+		<key>Resources/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/readme.txt</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			OGLiFswuLJEW5EPYKOeoauuCJFEtVa6jyzBE1OcJI98=
+			</data>
+		</dict>
+		<key>Resources/lxml/objectify.cpython-313-darwin.so</key>
+		<dict>
+			<key>symlink</key>
+			<string>../../Frameworks/lxml/objectify.cpython-313-darwin.so</string>
+		</dict>
+		<key>Resources/lxml/sax.cpython-313-darwin.so</key>
+		<dict>
+			<key>symlink</key>
+			<string>../../Frameworks/lxml/sax.cpython-313-darwin.so</string>
+		</dict>
 		<key>Resources/markupsafe</key>
 		<dict>
 			<key>symlink</key>
@@ -30730,6 +31046,11 @@
 		<dict>
 			<key>symlink</key>
 			<string>../Frameworks/tornado</string>
+		</dict>
+		<key>Resources/xlwings</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Frameworks/xlwings</string>
 		</dict>
 		<key>Resources/yaml</key>
 		<dict>
