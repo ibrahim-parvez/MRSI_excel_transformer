@@ -35,7 +35,7 @@ def embed_settings_popup(ws, cell_coordinate="AB1", show_popup=True):
         ("Outliers Excluded", "Outliers Excluded")
     ]
     
-    # --- NEW: Format Stdev Threshold based on Enable/Disable toggle ---
+    # Format Stdev Threshold based on Enable/Disable toggle ---
     stdev_enabled = config.get('STDEV_THRESHOLD_ENABLED', True)
     stdev_val = config.get('STDEV_THRESHOLD')
     stdev_display = f"{stdev_val}" if stdev_enabled else "Disabled"

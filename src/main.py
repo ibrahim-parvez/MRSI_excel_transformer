@@ -19,7 +19,7 @@ def main():
     app = QApplication(sys.argv)
 
     # ---------------------------------------------------------
-    # NEW: Set the Windows Taskbar Icon using Base64 (Windows ONLY)
+    # Set the Windows Taskbar Icon using Base64 (Windows ONLY)
     # ---------------------------------------------------------
     if sys.platform == 'win32':
         try:

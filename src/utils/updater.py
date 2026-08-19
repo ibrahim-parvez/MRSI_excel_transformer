@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QVBoxLayout, QLabel, QDialog, QGridLayout, QHBoxLay
 from PyQt6.QtCore import Qt, pyqtSignal
 
 # Update this to match the tag name on your GitHub Release (e.g., "v1.0.1")
-CURRENT_VERSION = "v1.3.0"
+CURRENT_VERSION = "v2.0.0"
 GITHUB_REPO = "ibrahim-parvez/MRSI_Data_Normalization_Tool"
 
 class UpdateAvailableDialog(QDialog):
@@ -19,7 +19,6 @@ class UpdateAvailableDialog(QDialog):
         self.setWindowTitle("Update Available")
         self.setFixedSize(350, 200)
         
-        # --- FIXED: Check parent's dark mode state ---
         self.dark_mode = getattr(parent, 'dark_mode', False)
         
         if self.dark_mode:
@@ -32,7 +31,6 @@ class UpdateAvailableDialog(QDialog):
             header_color = "#7A003C" # McMaster Maroon for light mode
             cancel_bg = "#9E9E9E"
             cancel_hover = "#757575"
-        # ---------------------------------------------
 
         layout = QVBoxLayout(self)
         
@@ -70,7 +68,7 @@ class UpdateAvailableDialog(QDialog):
             QPushButton:hover { background-color: #45A049; }
         """)
         
-        # --- FIXED: Use dynamic colors for the cancel button ---
+        # Use dynamic colors for the cancel button ---
         self.later_btn.setStyleSheet(f"""
             QPushButton {{ background-color: {cancel_bg}; color: white; padding: 8px 15px; border-radius: 4px; border: none; }}
             QPushButton:hover {{ background-color: {cancel_hover}; }}

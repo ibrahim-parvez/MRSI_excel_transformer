@@ -245,9 +245,7 @@ def step1_data_water(file_path, sheet_name='ExportGB2.wke', sparkline=False):
             # DUPLICATE FLAG TO OUTLIER ROW (r7)
             ws.cell(row=r7, column=col_U, value=flag_message).fill = flag_fill_red
 
-        # -------------------------------------------------------------------------
         # --- DYNAMIC FORMULA CONSTRUCTION FOR "OUTLIERS EXCL." (ROW 7) ---
-        # -------------------------------------------------------------------------
         # 1. Gather Data for analysis
         c_values = []
         o_values = []
@@ -328,9 +326,7 @@ def step1_data_water(file_path, sheet_name='ExportGB2.wke', sparkline=False):
         ws.cell(row=r7, column=col_S, value=f_o_avg).number_format = NUM_FORMAT_3_DECIMAL
         ws.cell(row=r7, column=col_T, value=f_o_std).number_format = NUM_FORMAT_3_DECIMAL
 
-        # -------------------------------------------------------------------------
         # --- CONDITIONAL FORMATTING (Red Strikethrough) ---
-        # -------------------------------------------------------------------------
         
         # Logic: OR(Value > Mean+Sigma*Stdev, Value < Mean-Sigma*Stdev)
         # Using ABSOLUTE references to the 'Last 6' stats cells in row r6

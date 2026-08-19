@@ -36,8 +36,19 @@ def get_valid_heco2_source_rows(df):
     valid_source_rows = set()
     seen_majors = {} 
     
+    # --- Fetch samples list to override heuristics ---
+    active_samples = settings.get_setting("ACTIVE_SAMPLES") or []
+    
     for _, row in df.iterrows():
-        ident = str(row['Identifier 1']).strip().lower()
+        raw_ident = str(row['Identifier 1']).strip()
+        
+        base_ident = re.sub(r'\s+[rR]\d+(?:\.\d+)*(?:[a-zA-Z]*)?$', '', raw_ident).strip()
+        
+        # 1. Trust the manual UI Drag & Drop lists completely
+        if base_ident in active_samples or raw_ident in active_samples:
+            continue
+            
+        ident = raw_ident.lower()
         if 'heco2' in ident or 'co2' in ident:
             major, minor = extract_run_number(ident)
             if major is None or major == 1: continue
@@ -118,7 +129,7 @@ def step5_group_water(file_path: str):
     else:
         stdev_threshold = None
 
-    # NEW: Get Outlier Settings
+    # Get Outlier Settings
     sigma_val = settings.get_setting("OUTLIER_SIGMA")
     if not isinstance(sigma_val, (int, float)): sigma_val = 2
     
@@ -178,10 +189,49 @@ def step5_group_water(file_path: str):
 
     group_min = df.groupby('Group_Key', sort=False)['Line_num'].min().reset_index(name='min_line')
 
-    def is_heco2(k): return bool(re.search(r'(?i)\b(heco2|co2)\b', str(k))) if k else False
+    # --- Fetch UI settings and tables for reference sorting ---
+    active_refs = settings.get_setting("ACTIVE_REFERENCES")
+    active_samples = settings.get_setting("ACTIVE_SAMPLES")
+    water_materials = settings.get_setting("REFERENCE_MATERIALS", sub_key="Water") or []
+
+    def is_heco2(k): 
+        if not k: return False
+        k_str = str(k).strip()
+        
+        # 1. Trust the manual UI Drag & Drop lists completely
+        if active_samples is not None and k_str in active_samples:
+            return False
+            
+        return bool(re.search(r'(?i)\b(heco2|co2)\b', k_str))
+        
     def is_ref(k):
+        if not k: return False
+        k_str = str(k).strip()
+        
+        # 1. Trust the manual UI Drag & Drop lists completely
+        if active_refs is not None and k_str in active_refs:
+            return True
+        if active_samples is not None and k_str in active_samples:
+            return False
+            
+        # 2. Check the global Advanced Settings table
+        base_clean = re.sub(r'[\s\-_]+', '', k_str.upper())
+        no_std = base_clean.replace("STD", "")
+        
+        for mat in water_materials:
+            std_name = mat.get("col_c", "")
+            if not std_name: continue
+            std_clean = re.sub(r'[\s\-_]+', '', str(std_name).upper())
+            std_no_std = std_clean.replace("STD", "")
+            
+            if std_clean and std_clean in base_clean: 
+                return True
+            if std_no_std and len(std_no_std) >= 4 and std_no_std in no_std: 
+                return True
+
+        # 3. Fallback to original Regex Heuristics
         pat = [r'\bMRSI\b', r'\bMRSI[- ]?\d+\b', r'\bMRSI[- ]?STD', r'\bUSGS']
-        return any(re.search(p, str(k).upper()) for p in pat) if k else False
+        return any(re.search(p, k_str.upper()) for p in pat)
 
     group_min['is_heco2'] = group_min['Group_Key'].apply(is_heco2)
     group_min['is_ref'] = group_min['Group_Key'].apply(is_ref)

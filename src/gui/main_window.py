@@ -68,10 +68,19 @@ from gui.tabs.combine_tab import CombineWorker
 def convert_xls_to_xlsx(file_path):
     new_path = os.path.splitext(file_path)[0] + ".xlsx"
     try:
-        df = pd.read_excel(file_path, engine="xlrd")
-        with pd.ExcelWriter(new_path, engine="openpyxl") as writer:
-            default_sheet_name = "ExportGB2.wke"
-            df.to_excel(writer, index=False, sheet_name=default_sheet_name)
+        # Utilize xlwings to invoke native Excel, preserving all sheets and formatting
+        app = xw.App(visible=False)
+        app.display_alerts = False  # Suppress Excel popups (e.g., overwrite warnings)
+        
+        try:
+            # Use absolute paths which are required by Excel's COM interface
+            wb = app.books.open(os.path.abspath(file_path))
+            wb.save(os.path.abspath(new_path))
+            wb.close()
+        finally:
+            # Ensure the hidden Excel instance is completely closed even if an error occurs
+            app.quit()
+            
         return new_path
     except Exception as e:
         raise Exception(f"XLS to XLSX conversion failed: {e}")
@@ -196,6 +205,17 @@ class WorkerThread(QThread):
                 ]
             
             selected_steps = [s for s, checked in self.steps.items() if checked]
+
+            # --- Restore Formatting by rerunning Step 6 ---
+            if "Step 7: Report" in selected_steps:
+                finisher_name = "Finalizing Formatting"
+                selected_steps.append(finisher_name)
+                
+                if self.tab_type == "carbonate":
+                    step_order.append((finisher_name, lambda: step6_normalization_carbonate(self.file_path)))
+                else:
+                    step_order.append((finisher_name, lambda: (refresh_excel(self.file_path), step6_normalization_water(self.file_path))))
+
             total = len(selected_steps)
             done = 0
             self.log.emit(f"Starting processing for: {os.path.basename(self.file_path)} (Type: {self.tab_type.title()})", "white")
@@ -208,7 +228,7 @@ class WorkerThread(QThread):
                 if name in selected_steps:
                     self.progress.emit(done, total, name)
                     
-                    # --- NEW: Log that the step is actively running ---
+                    # --- Log that the step is actively running ---
                     self.log.emit(f"▶  Running {name}...", "white") 
                     
                     try:
@@ -323,11 +343,9 @@ class AboutDialog(QDialog):
         version_label.setFont(QFont("Arial", 10))
         version_layout.addWidget(version_label)
         
-        # --- FIXED: Using a native system icon instead of an emoji ---
         self.refresh_btn = QPushButton()
         refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
         self.refresh_btn.setIcon(refresh_icon)
-        # -------------------------------------------------------------
         
         self.refresh_btn.setFixedSize(26, 26)
         self.refresh_btn.setToolTip("Check for Updates")
@@ -462,7 +480,7 @@ class SlopeGroupWidget(QFrame):
         self.layout.setContentsMargins(5, 5, 5, 5)
         
         header_row = QHBoxLayout()
-        lbl = QLabel(f"<b>Instance {index + 1}:</b>")
+        lbl = QLabel(f"<b>Normalization {index + 1}:</b>")
         lbl.setObjectName("slopeHeader") # Tells the global CSS to style this text
         header_row.addWidget(lbl)
         header_row.addStretch()
@@ -548,7 +566,6 @@ class MaterialTypeWidget(QWidget):
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels(self.headers)
         self.table.setAlternatingRowColors(True)
-        # ^ Notice: No setStyleSheet here anymore! It uses the global theme.
         
         header = self.table.horizontalHeader()
         for i in range(7):
@@ -557,10 +574,14 @@ class MaterialTypeWidget(QWidget):
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
         header.setMinimumSectionSize(30)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-              
+               
         self.table.setMinimumHeight(200)
         self.table.itemChanged.connect(self._on_table_item_changed)
         l.addWidget(self.table)
+        
+        self.extra_controls_layout = QVBoxLayout()
+        self.extra_controls_layout.setContentsMargins(0, 0, 0, 0)
+        l.addLayout(self.extra_controls_layout)
         
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("Add Row")
@@ -586,7 +607,7 @@ class MaterialTypeWidget(QWidget):
         self.slope_layout.setContentsMargins(0,0,0,0)
         l.addWidget(self.slope_container)
         
-        self.add_slope_btn = QPushButton("Add Slope Instance")
+        self.add_slope_btn = QPushButton("Add Normalization Group")
         self.add_slope_btn.clicked.connect(self.add_slope_group)
         l.addWidget(self.add_slope_btn)
         self.layout.addWidget(grp)
@@ -620,7 +641,7 @@ class MaterialTypeWidget(QWidget):
                 item.setBackground(highlight_color)
                 item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
                 
-                # --- NEW: Set the initial text color ---
+                # --- Set the initial text color ---
                 # QColor handles standard string names like "red", "darkblue", etc. perfectly
                 item.setForeground(QColor(current_color))
             
@@ -631,7 +652,6 @@ class MaterialTypeWidget(QWidget):
         combo.addItems(colors)
         combo.setCurrentText(current_color)
         
-        # --- FIXED: Connect to a new custom method instead of just the save lambda ---
         combo.currentTextChanged.connect(self._on_combo_color_changed)
         
         self.table.setCellWidget(row, 6, combo)
@@ -834,6 +854,7 @@ class DataToolApp(QWidget):
         super().__init__()
         self.setWindowTitle("MRSI - Data Normalization Tool")
         self.setMinimumSize(730, 825)
+        self.resize(730, 825)
 
         icon_pixmap = QPixmap()
         icon_pixmap.loadFromData(QByteArray.fromBase64(logo_base64.encode('utf-8')))
@@ -841,6 +862,8 @@ class DataToolApp(QWidget):
 
         
         self.file_path = None
+        self.tab_files = {0: None, 1: None}
+        self.current_tab_index = 0
         self.thread = None
         self.dark_mode = False
         self.is_locked = True
@@ -854,6 +877,9 @@ class DataToolApp(QWidget):
         self.water_tab = WaterTab()
         self.combine_tab = CombineTab()
         self.advanced_settings_tab = AdvancedSettingsTab()
+
+        self.carbonate_tab.references_updated.connect(self._sync_advanced_tables)
+        self.water_tab.references_updated.connect(self._sync_advanced_tables)
 
         self.light_stylesheet = """
         QWidget { background-color: #FAFAFA; font-family: Arial; color: #202124; }
@@ -985,7 +1011,6 @@ class DataToolApp(QWidget):
             self.setStyleSheet(self.dark_stylesheet)
         else:
             self.setStyleSheet(self.light_stylesheet)
-        # ----------------------------------
         
         self.init_ui()
         
@@ -1022,13 +1047,12 @@ class DataToolApp(QWidget):
         # Connect it to the exact same function
         self.dark_mode_shortcut_action.triggered.connect(self.toggle_dark_mode)
 
-    # ADD TO THE BOTTOM OF def __init__(self):
-        self.version_history = []
+        # --- VERSION HISTORY SETUP ---
+        self.tab_histories = {0: [], 1: []}  # Tracks history separately per tab
         self.history_temp_dir = tempfile.mkdtemp(prefix="mrsi_history_")
 
-    # ADD THESE NEW METHODS INSIDE DataToolApp:
     def save_version(self, description, target_path=None):
-        """Creates a copy of the current file in the temp directory."""
+        """Creates a copy of the current file in the temp directory specific to this tab."""
         path_to_backup = target_path or self.file_path
         if not path_to_backup or not os.path.exists(path_to_backup): return
 
@@ -1037,12 +1061,16 @@ class DataToolApp(QWidget):
         ext = os.path.splitext(path_to_backup)[1]
         base = os.path.basename(path_to_backup).replace(ext, "")
         
-        backup_name = f"{base}_{safe_time}_{len(self.version_history)}{ext}"
+        # Grab the history list for the current tab
+        current_history = self.tab_histories.setdefault(self.current_tab_index, [])
+        
+        # Add a tab prefix so files don't mix
+        backup_name = f"tab{self.current_tab_index}_{base}_{safe_time}_{len(current_history)}{ext}"
         backup_path = os.path.join(self.history_temp_dir, backup_name)
         
         try:
             shutil.copy2(path_to_backup, backup_path)
-            self.version_history.append({
+            current_history.append({
                 'time': timestamp,
                 'desc': description,
                 'path': backup_path
@@ -1052,20 +1080,26 @@ class DataToolApp(QWidget):
             self.on_log(f"Warning: Failed to create backup: {e}", "red")
 
     def reset_history(self):
-        """Clears history and deletes temp files when a new file is loaded."""
-        self.version_history.clear()
+        """Clears history and deletes temp files ONLY for the active tab."""
+        if hasattr(self, 'current_tab_index'):
+            self.tab_histories.setdefault(self.current_tab_index, []).clear()
+            
         self.history_btn.hide()
+        
+        # Selectively clean up files for THIS tab only
         for filename in os.listdir(self.history_temp_dir):
-            filepath = os.path.join(self.history_temp_dir, filename)
-            try:
-                os.remove(filepath)
-            except Exception:
-                pass
+            if filename.startswith(f"tab{getattr(self, 'current_tab_index', 0)}_"):
+                filepath = os.path.join(self.history_temp_dir, filename)
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
 
     def show_history_dialog(self):
-        if not self.version_history: return
+        current_history = self.tab_histories.get(self.current_tab_index, [])
+        if not current_history: return
 
-        dialog = VersionHistoryDialog(self.version_history, self)
+        dialog = VersionHistoryDialog(current_history, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             if dialog.action == 'open':
                 try:
@@ -1118,6 +1152,10 @@ class DataToolApp(QWidget):
                     QMessageBox.information(self, "Success", f"Converted to: {os.path.basename(new_path)}")
                     self.file_path = new_path
                     self.set_file_label(self.file_path)
+                    
+                    if hasattr(self.active_tab_widget, 'scan_file'):
+                        self.active_tab_widget.scan_file(self.file_path)
+                        
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Unable to convert file:\n{e}")
                     self.file_path = None
@@ -1130,6 +1168,9 @@ class DataToolApp(QWidget):
         else:
             self.file_path = path
             self.set_file_label(self.file_path)
+            
+            if hasattr(self.active_tab_widget, 'scan_file'):
+                self.active_tab_widget.scan_file(self.file_path)
 
     # UPDATE existing browse_file to use this new helper:
     def browse_file(self):
@@ -1185,7 +1226,6 @@ class DataToolApp(QWidget):
 
         logo_label.mousePressEvent = open_mcmaster_website
         #logo_label.setCursor(Qt.CursorShape.PointingHandCursor) # Changes cursor on hover
-        # -----------------------------------------
         
         # Add logo to the far left
         header.addWidget(logo_label)
@@ -1447,9 +1487,7 @@ class DataToolApp(QWidget):
         self.addAction(self.tab4_action)
         self.tab4_action.triggered.connect(lambda: self.switch_to_tab(self.advanced_tab_index)) # Advanced
 
-        # ==========================================================
-        # --- NEW: RUN SELECTED STEPS KEYBOARD SHORTCUT ------------
-        # ==========================================================
+        # --- RUN SELECTED STEPS KEYBOARD SHORTCUT ------------
         self.run_action = QAction("Run Steps", self)
         self.run_action.setShortcut(QKeySequence("Ctrl+R")) # Maps to Cmd+R on Mac
         self.addAction(self.run_action)
@@ -1659,6 +1697,12 @@ class DataToolApp(QWidget):
                 self.show_toast("🔓 Advanced Settings have been unlocked.")
                 
     def on_tab_changed(self, index):
+        # --- Save current file path to the outgoing tab's state ---
+        if hasattr(self, 'current_tab_index'):
+            self.tab_files[self.current_tab_index] = self.file_path
+            
+        self.current_tab_index = index
+
         # 1. Clean Content Frame
         while self.content_frame_layout.count():
             item = self.content_frame_layout.takeAt(0)
@@ -1667,7 +1711,7 @@ class DataToolApp(QWidget):
 
         # 2. Handle Tab Selection and Visibility
         if index == 0:
-            self.active_tab_widget = self.water_tab # Assuming you flipped them!
+            self.active_tab_widget = self.water_tab
             if hasattr(self.water_tab, 'refresh_step_labels'):
                 self.water_tab.refresh_step_labels()
             self.file_box.show()
@@ -1692,19 +1736,16 @@ class DataToolApp(QWidget):
         self.active_tab_widget.show()
 
         # 4. Handle Button Visibility 
-        # --- FIXED: Hide buttons on Advanced Settings Tab ---
         if self.active_tab_widget == self.advanced_settings_tab:
             self.run_btn.hide()
             self.stop_btn.hide()
             self.clear_log_btn.hide()
-
             self.log_box.hide()
             self.progress.hide()
         else:
             if self.log_box.toPlainText().strip():
                 self.log_box.show()
 
-            # Normal logic for Water, Carbonate, and Combine tabs
             if not (self.thread and self.thread.isRunning()):
                 self.run_btn.show()
                 self.clear_log_btn.show()
@@ -1713,6 +1754,20 @@ class DataToolApp(QWidget):
                 self.run_btn.hide()
                 self.stop_btn.show()
                 self.clear_log_btn.show()
+                
+        # --- Restore the file state for the newly selected tab ---
+        if index in [0, 1]:  # Water or Carbonate tabs
+            self.file_path = self.tab_files.get(index)
+            if self.file_path:
+                self.set_file_label(self.file_path)
+            else:
+                self.set_no_file_label()
+
+        # --- Update History Button Visibility for current tab ---
+        if hasattr(self, 'tab_histories') and self.tab_histories.get(index, []):
+            self.history_btn.show()
+        else:
+            self.history_btn.hide()
         
     def show_menu(self):
         # Pass 'self' so the menu inherits the current stylesheet!
@@ -1724,9 +1779,8 @@ class DataToolApp(QWidget):
         update_action = menu.addAction("Check for Updates")
         update_action.triggered.connect(self.check_for_updates)
         
-        # --- UPDATED: Reuse the global action created in __init__ ---
+        # --- Reuse the global action created in __init__ ---
         menu.addAction(self.dark_mode_action)
-        # ------------------------------------------------------------
         
         # Calculate position relative to the BUTTON
         pos = self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height()))
@@ -1773,8 +1827,21 @@ class DataToolApp(QWidget):
 
     def remove_file(self):
         self.file_path = None
+        
+        # Erase the memory for the current tab
+        if hasattr(self, 'current_tab_index'):
+            self.tab_files[self.current_tab_index] = None
+            
         self.reset_history()
         self.set_no_file_label()
+        
+        if hasattr(self.active_tab_widget, 'current_file_path'):
+            self.active_tab_widget.current_file_path = None
+            if hasattr(self.active_tab_widget, 'sheet_entry'):
+                self.active_tab_widget.sheet_entry.clear()
+            if hasattr(self.active_tab_widget, 'ref_list'):
+                self.active_tab_widget.ref_list.clear()     
+                self.active_tab_widget.sample_list.clear()  
 
     def browse_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1909,6 +1976,9 @@ class DataToolApp(QWidget):
         # --- COMBINE TAB LOGIC ---
         if self.active_tab_widget == self.combine_tab:
             params = self.combine_tab.get_run_parameters()
+
+            if params is None:
+                return
             
             if not params["file_list"]:
                 QMessageBox.warning(self, "Error", "No files selected to combine.")
@@ -1916,7 +1986,7 @@ class DataToolApp(QWidget):
             if not params["output_path"]:
                 QMessageBox.warning(self, "Error", "Please select an output path.")
                 return
-            
+
             # Setup UI for running
             self.log_box.show()
             self.progress.show()
@@ -1957,7 +2027,19 @@ class DataToolApp(QWidget):
             return
         
         try:
+            # 1. Get the base parameters
             steps, sheet_name, filter_opt = self.active_tab_widget.get_run_parameters()
+            
+            # --- Fetch and globally save the advanced parameters ---
+            if hasattr(self.active_tab_widget, 'get_advanced_parameters'):
+                adv_params = self.active_tab_widget.get_advanced_parameters()
+                
+                # Push them to your global settings memory (using .get() to prevent WaterTab crashes)
+                settings.set_setting("CALC_YIELD", adv_params.get("calc_yield", False))
+                settings.set_setting("CALC_CO2", adv_params.get("calc_co2", False))
+                settings.set_setting("ACTIVE_REFERENCES", adv_params.get("references", []))
+                settings.set_setting("ACTIVE_SAMPLES", adv_params.get("samples", []))
+                
         except AttributeError:
             QMessageBox.critical(self, "Internal Error", "Could not retrieve parameters.")
             return
@@ -2076,6 +2158,17 @@ class DataToolApp(QWidget):
             self.update_progress_dialog.close()
             
         QMessageBox.critical(self, "Updater Error", f"An error occurred during the update process:\n\n{error_msg}")
+
+    def _sync_advanced_tables(self):
+        """Silently reloads the advanced settings tables to reflect newly dragged references."""
+        if hasattr(self, "advanced_settings_tab"):
+            self.advanced_settings_tab.carb_widget.load_data()
+            self.advanced_settings_tab.water_widget.load_data()
+            self.advanced_settings_tab.co2_widget.load_data()
+            
+            # Refresh Yield dropdowns dynamically so the new items appear in slope menus
+            if hasattr(self.advanced_settings_tab, 'yield_widget'):
+                self.advanced_settings_tab.yield_widget.refresh_slope_ui()
 
 """     
 if __name__ == "__main__":

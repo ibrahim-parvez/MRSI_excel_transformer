@@ -220,6 +220,41 @@ def step5_group_carbonate(file_path: str):
         if base_key not in grouped_rows: grouped_rows[base_key] = []
         grouped_rows[base_key].append(r)
 
+    # --- Fetch UI settings for manual Drag & Drop mapping ---
+    active_refs = settings.get_setting("ACTIVE_REFERENCES")
+    active_samples = settings.get_setting("ACTIVE_SAMPLES")
+
+    def is_reference_group(base_name):
+        if not base_name: return False
+        raw_text = str(base_name).strip()
+        text_clean = re.sub(r'[\s\-_]+', '', raw_text.upper())
+        text_no_std = text_clean.replace("STD", "")
+        
+        # 1. Trust the manual UI Drag & Drop lists completely
+        if active_refs is not None and raw_text in active_refs:
+            return True
+        if active_samples is not None and raw_text in active_samples:
+            return False
+            
+        # 2. Hardcoded exceptions (CO2/HeCO2)
+        if text_clean.startswith("CO2") or text_clean.startswith("HECO2") or text_clean.startswith("C02") or text_clean.startswith("HEC02"):
+            return True
+            
+        # 3. Check the global Advanced Settings table (ref_materials_carb)
+        for mat in ref_materials_carb:
+            std_name = mat.get("col_c")
+            if not std_name: continue
+            
+            std_clean = re.sub(r'[\s\-_]+', '', str(std_name).upper())
+            std_no_std = std_clean.replace("STD", "")
+            
+            if std_clean and std_clean in text_clean:
+                return True
+            if std_no_std and len(std_no_std) >= 4 and std_no_std in text_no_std:
+                return True
+                
+        return False
+
     # Split into Reference List (Phase 1) and Sample List (Phase 2)
     # This ensures separator is always between Refs and Samples.
     refs_list = []
@@ -227,17 +262,12 @@ def step5_group_carbonate(file_path: str):
 
     for base_key, row_indices in grouped_rows.items():
         k_str = str(base_key)
-        k_lower = k_str.lower()
         
         # Exclude Water
         if k_str in water_names:
             continue
             
-        # UPDATED LOGIC HERE:
-        # Check if Reference: Either in Carb settings list OR contains "co2"/"heco2"
-        is_co2_ref = "co2" in k_lower or "heco2" in k_lower
-        
-        if k_str in carb_names or is_co2_ref:
+        if is_reference_group(k_str):
             refs_list.append((base_key, row_indices))
         else:
             samples_list.append((base_key, row_indices))

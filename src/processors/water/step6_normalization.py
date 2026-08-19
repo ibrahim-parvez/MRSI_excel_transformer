@@ -24,11 +24,24 @@ def get_valid_heco2_indices(ws):
     valid_rows = set()
     seen_majors = {} 
     max_row = ws.max_row
+    
+    # --- Fetch samples list to override heuristics ---
+    active_samples = settings.get_setting("ACTIVE_SAMPLES") or []
+    
     for r in range(1, max_row + 1):
         val = ws.cell(row=r, column=3).value
         if not val:
             continue
-        s_val = str(val).strip().lower()
+            
+        raw_val = str(val).strip()
+        
+        base_ident = re.sub(r'\s+[rR]\d+(?:\.\d+)*(?:[a-zA-Z]*)?$', '', raw_val).strip()
+        
+        # 1. Trust the manual UI Drag & Drop lists completely
+        if base_ident in active_samples or raw_val in active_samples:
+            continue
+            
+        s_val = raw_val.lower()
         if "heco2" in s_val or "co2" in s_val:
             major, minor = extract_run_number(s_val)
             if major is None or major == 1: 
@@ -145,6 +158,49 @@ def step6_normalization_water(file_path: str):
         
         std_color_map[name] = Font(color=hex_code)
         std_bold_color_map[name] = Font(color=hex_code, bold=True)
+
+    # ==========================================================
+    # === Canonical Standard Naming (FIX) ======================
+    # ==========================================================
+    # Two blocks of the SAME standard (e.g. "MRSI W1 R2" and "MRSI W1 R7")
+    # used to resolve to two DIFFERENT keys, which meant they were treated as
+    # two unrelated standards downstream. Everything now funnels through
+    # canonical_std_name() so every block of a standard lands on ONE key.
+
+    def clean_match(s):
+        return re.sub(r'[\s\-_]+', '', str(s)).upper().replace("STD", "")
+
+    def strip_run_suffix(s):
+        if s is None:
+            return None
+        return re.sub(r'\s+[rR]\d+(?:\.\d+)*(?:[a-zA-Z]*)?$', '', str(s).strip()).strip()
+
+    def canonical_std_name(ref):
+        """Map any reference-ish string onto the exact standard name in settings."""
+        if not ref:
+            return None
+        ref_str = strip_run_suffix(ref)
+        if not ref_str:
+            return None
+
+        # 1. Exact (case-insensitive) match
+        for std in water_stds_settings:
+            nm = std.get("col_c")
+            if nm and str(nm).strip().upper() == ref_str.upper():
+                return nm
+
+        # 2. Normalized containment match (handles "MRSI W1" vs "MRSI-STD-W1")
+        a = clean_match(ref_str)
+        for std in water_stds_settings:
+            nm = std.get("col_c")
+            if not nm:
+                continue
+            b = clean_match(nm)
+            if a and b and (a in b or b in a) and min(len(a), len(b)) >= 3:
+                return nm
+
+        # 3. Unknown reference - keep it, but at least without the run suffix
+        return ref_str
 
     # --- Border Helper ---
     def apply_box_border(ws, start_row, start_col, end_row, end_col, fill):
@@ -546,38 +602,48 @@ def step6_normalization_water(file_path: str):
         if not isinstance(identifier, str): identifier = str(identifier)
         return re.sub(r'\s+[rR]\d+(?:\.\d+)*(?:[a-zA-Z]*)?$', '', identifier).strip()
 
+    # --- Fetch UI settings for manual Drag & Drop mapping ---
+    active_refs = settings.get_setting("ACTIVE_REFERENCES")
+    active_samples = settings.get_setting("ACTIVE_SAMPLES")
+
     def reference_base_key(identifier):
-        """
-        Dynamic: Checks if the identifier contains the name of any standard 
-        defined in settings, with fuzzy matching to ignore 'STD' and dashes.
-        """
         if identifier is None: return None
         
-        # 1. Clean the incoming cell identifier
-        raw_text = str(identifier).upper().strip()
-        text_clean = re.sub(r'[\s\-_]+', '', raw_text) # Removes spaces, dashes, underscores
+        raw_text = str(identifier).strip()
+        raw_upper = raw_text.upper()
+        text_clean = re.sub(r'[\s\-_]+', '', raw_upper)
         text_no_std = text_clean.replace("STD", "")
         
-        # 2. Iterate through the dynamic standards loaded from settings
+        # 1. Trust the manual UI Drag & Drop lists completely
+        if active_refs is not None and raw_text in active_refs:
+            return raw_text
+        if active_samples is not None and raw_text in active_samples:
+            return None
+            
+        # 2. Check the global Advanced Settings table (water_stds_settings)
         for std in water_stds_settings:
             std_name = std.get("col_c")
-            if not std_name: 
-                continue
+            if not std_name: continue
             
-            # Clean the standard name from settings
-            std_clean = re.sub(r'[\s\-_]+', '', std_name.upper())
+            std_clean = re.sub(r'[\s\-_]+', '', str(std_name).upper())
             std_no_std = std_clean.replace("STD", "")
             
-            # Match Condition 1: Exact clean match (e.g., MRSISTDW1 in MRSISTDW1RUN1)
-            if std_clean in text_clean:
+            if std_clean and std_clean in text_clean:
+                return std_name
+            if std_no_std and len(std_no_std) >= 4 and std_no_std in text_no_std:
                 return std_name
                 
-            # Match Condition 2: Lenient match ignoring "STD" (e.g., MRSIW1 in MRSIW1RUN1)
-            # Enforce a minimum length of 4 so it doesn't accidentally match tiny strings
-            if len(std_no_std) >= 4 and std_no_std in text_no_std:
-                return std_name
-                
+        # 3. Fallback to original Regex Heuristics
+        pat = [r'\bMRSI\b', r'\bMRSI[- ]?\d+\b', r'\bMRSI[- ]?STD', r'\bUSGS']
+        if any(re.search(p, raw_upper) for p in pat):
+            return raw_text
+            
         return None
+
+    def resolved_reference(identifier):
+        """reference_base_key() + canonicalisation, so every block of the same
+        standard resolves to one identical key regardless of run number."""
+        return canonical_std_name(reference_base_key(identifier))
 
     dest_start_row = slope_box_end + 3
     group_infos = []
@@ -631,7 +697,9 @@ def step6_normalization_water(file_path: str):
 
         first_id = group_values_ws.cell(row=data_start_src, column=3).value
         base_key = create_group_key(first_id)
-        ref_base = reference_base_key(base_key)
+        # FIX: canonicalise so "MRSI W1" (block 1) and "MRSI W1" (block 2)
+        # always produce the exact same ref_base key.
+        ref_base = resolved_reference(base_key)
         group_infos.append({
             'src_data_start': data_start_src,
             'src_data_end': data_end_src,
@@ -651,7 +719,7 @@ def step6_normalization_water(file_path: str):
         is_valid_heco2 = (src_r in valid_heco2_src_rows)
         id_val = group_values_ws.cell(row=src_r, column=3).value
         id_color = None
-        norm_ref = reference_base_key(id_val)
+        norm_ref = resolved_reference(id_val)
         if norm_ref and norm_ref in std_color_map:
             id_color = std_color_map[norm_ref]
 
@@ -701,9 +769,16 @@ def step6_normalization_water(file_path: str):
                             if cell.value:
                                 cell.font = bold_color
         
-        bk = str(gi['base_key']).lower()
-        if "heco2" in bk or "co2" in bk:
-            heco2_dst_ranges.append(gi)
+        bk_raw = str(gi['base_key']).strip()
+        bk_upper = bk_raw.upper()
+        
+        is_explicit_sample = False
+        if active_samples is not None and bk_raw in active_samples:
+            is_explicit_sample = True
+            
+        if not is_explicit_sample:
+            if "HECO2" in bk_upper or "CO2" in bk_upper:
+                heco2_dst_ranges.append(gi)
 
     # --- 3. Construct "All" Summary Blocks ---
     ref_groups_by_base = {}
@@ -769,11 +844,34 @@ def step6_normalization_water(file_path: str):
             cell.font = black_bold
             cell.fill = yellow_fill
 
-        # --- NEW LOGIC: Collect INDIVIDUAL raw data cells instead of the sub-group averages ---
-        k_refs = [] # For Carbon (Col 11)
-        n_refs = [] # For Oxygen (Col 14)
+        # ==================================================================
+        # === RESTORED LOGIC: Average = AVERAGE of each block's Average ====
+        # ==================================================================
+        # When the same standard appears as two (or more) separate blocks,
+        # the "All" average must be the average OF THE BLOCK AVERAGES, not a
+        # pooled average of individual measurements (and definitely not just
+        # one block's average).
+        #
+        #   group_avg_k / group_avg_n -> one cell per block (its own Average)
+        #   k_refs / n_refs           -> every raw measurement (Stdev + Count)
+
+        group_avg_k = []  # Carbon  block-average cells (Col K)
+        group_avg_n = []  # Oxygen  block-average cells (Col N)
+        k_refs = []       # Carbon  raw data cells (Col 11)
+        n_refs = []       # Oxygen  raw data cells (Col 14)
         
         for g in groups:
+            # --- (a) This block's own Average cell (respects Outlier mode) ---
+            cm = g.get('dst_calc_mid')
+            if cm:
+                blk_avg_row = cm + calc_value_offset
+                if blk_avg_row <= summary_ws.max_row:
+                    if summary_ws.cell(row=blk_avg_row, column=11).value is not None:
+                        group_avg_k.append(f"K{blk_avg_row}")
+                    if summary_ws.cell(row=blk_avg_row, column=14).value is not None:
+                        group_avg_n.append(f"N{blk_avg_row}")
+
+            # --- (b) Raw measurements, pooled across blocks (Stdev / Count) ---
             ds = g.get('dst_data_start')
             de = g.get('dst_data_end')
             if not ds or not de:
@@ -783,9 +881,15 @@ def step6_normalization_water(file_path: str):
                 # Check if it's a valid data row (Skip HeCO2 inner headers)
                 id_val = summary_ws.cell(row=r, column=3).value
                 if isinstance(id_val, str):
-                    norm_val = id_val.strip().upper()
-                    if norm_val.startswith("HECO2") or norm_val.startswith("CO2"):
-                        continue 
+                    raw_val = id_val.strip()
+                    norm_val = raw_val.upper()
+                    
+                    base_ident = re.sub(r'\s+[rR]\d+(?:\.\d+)*(?:[a-zA-Z]*)?$', '', raw_val).strip()
+                    
+                    # Trust UI Samples overrides
+                    if active_samples is None or (base_ident not in active_samples and raw_val not in active_samples):
+                        if norm_val.startswith("HECO2") or norm_val.startswith("CO2"):
+                            continue 
                 
                 # Target Cells
                 cell_k = summary_ws.cell(row=r, column=11)
@@ -807,26 +911,43 @@ def step6_normalization_water(file_path: str):
                     if not use_outliers or not strike_n:
                         n_refs.append(f"N{r}")
 
-        # Helper to safely build formulas avoiding empty lists
-        def build_formula(func, refs):
-            if not refs: return ""
-            return f"={func}({','.join(refs)})"
+        # If a block average could not be located, fall back to the raw pool so
+        # the cell is never left blank.
+        k_avg_src = group_avg_k if group_avg_k else k_refs
+        n_avg_src = group_avg_n if group_avg_n else n_refs
 
-        # Write Values to the Yellow "All" Block using the pool of individual data cells
+        # Helper to safely build formulas avoiding empty lists / #DIV/0!
+        def build_avg(refs):
+            if not refs: return ""
+            joined = ",".join(refs)
+            return f'=IF(COUNT({joined})=0,"",AVERAGE({joined}))'
+
+        def build_stdev(refs):
+            if not refs: return ""
+            joined = ",".join(refs)
+            return f'=IF(COUNT({joined})<2,"",STDEV({joined}))'
+
+        def build_count(refs):
+            if not refs: return ""
+            return f"=COUNT({','.join(refs)})"
+
+        # Write Values to the Yellow "All" Block
+        if k_avg_src:
+            summary_ws.cell(row=value_row, column=11, value=build_avg(k_avg_src)).number_format = FMT_3_DEC
         if k_refs:
-            summary_ws.cell(row=value_row, column=11, value=build_formula("AVERAGE", k_refs)).number_format = FMT_3_DEC
-            summary_ws.cell(row=value_row, column=12, value=build_formula("STDEV", k_refs)).number_format = FMT_3_DEC
-            summary_ws.cell(row=value_row, column=13, value=build_formula("COUNT", k_refs))
+            summary_ws.cell(row=value_row, column=12, value=build_stdev(k_refs)).number_format = FMT_3_DEC
+            summary_ws.cell(row=value_row, column=13, value=build_count(k_refs))
         
+        if n_avg_src:
+            summary_ws.cell(row=value_row, column=14, value=build_avg(n_avg_src)).number_format = FMT_3_DEC
         if n_refs:
-            summary_ws.cell(row=value_row, column=14, value=build_formula("AVERAGE", n_refs)).number_format = FMT_3_DEC
-            summary_ws.cell(row=value_row, column=15, value=build_formula("STDEV", n_refs)).number_format = FMT_3_DEC
-            summary_ws.cell(row=value_row, column=16, value=build_formula("COUNT", n_refs))
+            summary_ws.cell(row=value_row, column=15, value=build_stdev(n_refs)).number_format = FMT_3_DEC
+            summary_ws.cell(row=value_row, column=16, value=build_count(n_refs))
 
         for c_idx in range(11, 18):
             summary_ws.cell(row=value_row, column=c_idx).font = black_bold
 
-        # --- NEW LOGIC: Force Conditional Formatting on these specific inserted STDEV cells ---
+        # --- Force Conditional Formatting on these specific inserted STDEV cells ---
         if stdev_threshold is not None:
             thresh_str = str(stdev_threshold)
             
@@ -849,19 +970,32 @@ def step6_normalization_water(file_path: str):
         # Link Top Blue Box (Rows 5-8) to this new "All" block
         ref_base = action['ref_base']
         
-        if ref_base and ref_base in std_row_index_map:
+        target_r = None
+        matched_key = None
+        
+        if ref_base in std_row_index_map:
             target_r = std_row_index_map[ref_base]
-            
+            matched_key = ref_base
+        elif ref_base:
+            ref_clean = clean_match(ref_base)
+            for k, v in std_row_index_map.items():
+                k_clean = clean_match(k)
+                if ref_clean and k_clean and (ref_clean in k_clean or k_clean in ref_clean):
+                    target_r = v
+                    matched_key = k
+                    break
+        
+        if target_r is not None:
             # Get the color for this standard
-            color_f = std_bold_color_map.get(ref_base, black_bold)
+            color_f = std_bold_color_map.get(matched_key, black_bold)
             
-            # Write formulas pointing to the new "All" block
+            # (The script dynamically filters the ranges inside the block itself)
             c = summary_ws.cell(row=target_r, column=11, value=f"=K{value_row}")
             c.font = color_f; c.number_format = FMT_3_DEC
             
             c = summary_ws.cell(row=target_r, column=14, value=f"=N{value_row}")
             c.font = color_f; c.number_format = FMT_3_DEC
-    
+            
     # --- 4. Fill in He/CO2 Box (Dynamic Row) ---
     # use the 'heco2_row' variable we calculated in the layout section
     
@@ -901,14 +1035,17 @@ def step6_normalization_water(file_path: str):
     summary_ws.column_dimensions['C'].width = 30
     summary_ws.column_dimensions['B'].width = 15
     summary_ws.column_dimensions['R'].width = 16
-    # Dynamic Freeze Pane
-    summary_ws.freeze_panes = f"B{dest_start_row + 1}"
+    # Dynamic Freeze Pane (Conditional)
+    if settings.get_setting("ENABLE_FREEZE_PANE") is not False:
+        summary_ws.freeze_panes = f"B{dest_start_row + 1}"
 
     # --- Calculations Columns (Dynamic V, W, X...) ---
     
     # Store ranges for the Result Box summary
-    # CHANGED: Dict now just stores rows: { "StdName": [row1, row2, ...] }
+    # standard_ranges      : { "StdName": [row1, row2, ...] }  (every raw row, all blocks)
+    # standard_group_avgs  : { "StdName": [avgRowBlock1, avgRowBlock2, ...] }
     standard_ranges = {} 
+    standard_group_avgs = {}
     col_N_str = get_column_letter(14)
     
     for gi in group_infos:
@@ -916,14 +1053,27 @@ def step6_normalization_water(file_path: str):
         de = gi.get('dst_data_end')
         if not ds or not de or de < ds: continue
 
+        # FIX: use the GROUP-level canonical reference for every row in this
+        # block. Previously each row was re-resolved individually, so
+        # "MRSI W1 R2" and "MRSI W1 R7" became two separate keys and the second
+        # block simply overwrote the first in the results box.
+        gi_ref = gi.get('ref_base')
+
         for r in range(ds, de + 1):
             id_val = summary_ws.cell(row=r, column=3).value
             
             # Check for Header/Skip rows (HeCO2)
             skip_row = False
             if isinstance(id_val, str):
-                normalized_val = id_val.strip().upper()
-                if normalized_val.startswith("HECO2") or normalized_val.startswith("CO2"): skip_row = False
+                raw_val = id_val.strip()
+                normalized_val = raw_val.upper()
+                
+                base_ident = re.sub(r'\s+[rR]\d+(?:\.\d+)*(?:[a-zA-Z]*)?$', '', raw_val).strip()
+                
+                # Trust UI Samples overrides
+                if active_samples is None or (base_ident not in active_samples and raw_val not in active_samples):
+                    if normalized_val.startswith("HECO2") or normalized_val.startswith("CO2"): 
+                        skip_row = True 
             
             # Write ID to Column S (Spacer)
             if not skip_row: summary_ws.cell(row=r, column=col_S, value=id_val)
@@ -944,12 +1094,9 @@ def step6_normalization_water(file_path: str):
                     c = summary_ws.cell(row=r, column=col_idx, value=v_formula)
                     c.number_format = FMT_2_DEC
 
-            # 2. REFERENCE MAPPING: Just track the row number
-            ref = reference_base_key(id_val)
-            if ref:
-                if ref not in standard_ranges:
-                    standard_ranges[ref] = []
-                standard_ranges[ref].append(r)
+            # 2. REFERENCE MAPPING: track the row under the block's canonical key
+            if gi_ref and id_val is not None:
+                standard_ranges.setdefault(gi_ref, []).append(r)
 
         # Recalculate Average row location
         calc_mid = gi.get('dst_calc_mid')
@@ -972,6 +1119,13 @@ def step6_normalization_water(file_path: str):
         
         # --- ROW 2: STDEV ---
         summary_ws.cell(row=avg_row, column=col_S, value="STDEV").font = Font(bold=True)
+
+        # Remember WHERE this block's per-column Average lives, so the results
+        # box can average the block averages together.
+        gi['dst_avg_row'] = avg_row - 1
+        gi['dst_stdev_row'] = avg_row
+        if gi_ref:
+            standard_group_avgs.setdefault(gi_ref, []).append(avg_row - 1)
         
         # Calculate Per-Column Stats (Average on Top, STDEV Below)
         for group_key, col_idx in group_col_map.items():
@@ -1058,9 +1212,11 @@ def step6_normalization_water(file_path: str):
         if norm_ref in standard_cells_map:
             cell_info = standard_cells_map[norm_ref]
         else:
-            # Fuzzy Match
+            # Fuzzy Match (normalised, both directions)
+            nr = clean_match(norm_ref)
             for k, v in standard_cells_map.items():
-                if norm_ref.replace(" ","").lower() in k.replace(" ","").lower():
+                kc = clean_match(k)
+                if nr and kc and (nr in kc or kc in nr):
                     cell_info = v
                     break
         
@@ -1070,14 +1226,22 @@ def step6_normalization_water(file_path: str):
         target_row = cell_info['row']
         target_stdev_col = cell_info['stdev_col']
         target_count_col = cell_info['count_col']
+
+        # Block-average rows for this standard (one per block of the standard)
+        block_avg_rows = standard_group_avgs.get(norm_ref, [])
         
         # 1. FILL EVERY GROUP COLUMN (Average)
-        # We iterate all available calculation columns (V, W, X...)
+        # RESTORED: average the per-block Averages together instead of pooling
+        # every raw row (and instead of only picking up one block).
         for group_key, col_idx in group_col_map.items():
             col_letter = get_column_letter(col_idx)
             
-            # Construct non-contiguous range for this specific column (e.g., V5, V8, V12)
-            ranges_str = ",".join([f"{col_letter}{r}" for r in rows])
+            if block_avg_rows:
+                # e.g. =IF(COUNT(V25,V48)=0,"",AVERAGE(V25,V48))
+                ranges_str = ",".join([f"{col_letter}{r}" for r in block_avg_rows])
+            else:
+                # Fallback: no block average row was recorded, pool the raw rows
+                ranges_str = ",".join([f"{col_letter}{r}" for r in rows])
             
             # Write AVERAGE formula
             c = summary_ws.cell(row=target_row, column=col_idx)
@@ -1085,9 +1249,8 @@ def step6_normalization_water(file_path: str):
             c.number_format = FMT_2_DEC
         
         # 2. FILL STDEV & COUNT
-        # We need to decide which column to use for the "Official" STDEV/Count.
-        # Logic: Use the column corresponding to the group this standard belongs to.
-        # If the standard isn't in a group (unlikely), default to the first column.
+        # STDEV / N stay based on the individual measurements across ALL blocks,
+        # so N reflects the true number of analyses.
         
         stats_source_col_idx = start_calc_col # Default to first group
         
@@ -1104,7 +1267,7 @@ def step6_normalization_water(file_path: str):
         
         # Write STDEV
         c = summary_ws.cell(row=target_row, column=target_stdev_col)
-        c.value = f"=IF(COUNT({stats_ranges_str})=0,\"\",STDEV({stats_ranges_str}))"
+        c.value = f"=IF(COUNT({stats_ranges_str})<2,\"\",STDEV({stats_ranges_str}))"
         c.number_format = FMT_2_DEC
         
         # Write Count

@@ -65,9 +65,7 @@ def step3_last6_carbonate(file_path):
     max_row = ws_source.max_row or 1
     max_col = ws_source.max_column or 1
 
-    # ------------------------------------------------------------
     # COPY HEADER (row 1, including formatting)
-    # ------------------------------------------------------------
     header_map = {}
     for c in range(1, max_col + 1):
         src = ws_source.cell(row=1, column=c)
@@ -89,9 +87,7 @@ def step3_last6_carbonate(file_path):
     special_headers = {"comment", "identifier 2", "analysis"}
     special_cols = {idx for name, idx in header_map.items() if name in special_headers}
 
-    # ------------------------------------------------------------
     # COPY ROW HEIGHTS, COLUMN WIDTHS
-    # ------------------------------------------------------------
     for r in range(1, max_row + 1):
         src_dim = ws_source.row_dimensions.get(r)
         if src_dim and src_dim.height:
@@ -103,9 +99,7 @@ def step3_last6_carbonate(file_path):
         if src_dim and src_dim.width:
             ws_new.column_dimensions[col_letter].width = src_dim.width
 
-    # ------------------------------------------------------------
     # COPY MERGED CELLS
-    # ------------------------------------------------------------
     try:
         for merged_range in ws_source.merged_cells.ranges:
             try:
@@ -115,9 +109,7 @@ def step3_last6_carbonate(file_path):
     except Exception:
         pass
 
-    # ------------------------------------------------------------
     # COPY ONLY ROWS MATCHING THE FILTER TARGET
-    # ------------------------------------------------------------
     col_q = 17
     new_row = 2
     mapping_new_to_src = {}
@@ -155,9 +147,7 @@ def step3_last6_carbonate(file_path):
     last_row = ws_new.max_row
     last_col = ws_new.max_column
 
-    # ------------------------------------------------------------
     # DECIMAL PLACE DISPLAY RULES (NO ROUNDING)
-    # ------------------------------------------------------------
     fmt_three = "0.000"
     fmt_two = "0.00"
 
@@ -216,9 +206,7 @@ def step3_last6_carbonate(file_path):
             )
         )
 
-    # ------------------------------------------------------------
     # SELECT A1, MAKE SHEET ACTIVE
-    # ------------------------------------------------------------
     for s in wb.worksheets:
         try:
             s.sheet_view.tabSelected = False

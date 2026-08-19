@@ -76,9 +76,20 @@ def step1_data_carbonate(file_path, sheet_name='ExportGB2.wke'):
         'Sum area all', 'area peaks', 'funny peaks', 'min intensity'
     ]
 
-    wb = load_workbook(file_path)
+    wb = load_workbook(file_path, keep_links=False)
     if new_sheet_name in wb.sheetnames:
         del wb[new_sheet_name]
+
+    # --- Remove only broken/ghost named ranges ---
+    if hasattr(wb, 'defined_names') and hasattr(wb.defined_names, 'definedName'):
+        valid_names = []
+        for dn in wb.defined_names.definedName:
+            val = str(dn.value) if dn.value else ""
+            # Drop ranges pointing to the deleted sheet or broken #REF! errors
+            if new_sheet_name in val or '#REF!' in val:
+                continue
+            valid_names.append(dn)
+        wb.defined_names.definedName = valid_names
 
     first_index = wb.index(wb[sheet_name])
     ws = wb.create_sheet(new_sheet_name, first_index)
@@ -190,7 +201,7 @@ def step1_data_carbonate(file_path, sheet_name='ExportGB2.wke'):
     group_spacer_rows = []
     all_delta_rows = []
 
-    grouped = df.groupby('Row', sort=False)
+    grouped = df.groupby(['Row', 'Identifier 1', 'Time Code'], sort=False)
 
     # PROCESS GROUPS
     for Row, group in grouped:
@@ -231,7 +242,6 @@ def step1_data_carbonate(file_path, sheet_name='ExportGB2.wke'):
         last_data_row = cur_row - 1
         last7_start = max(first_data_row, last_data_row - 6)
         
-        # --- FIXED ROW INDEX: Must match for Formula AND Formatting ---
         last6_start = max(first_data_row, last_data_row - 5)
         
         # Define Ranges for Formulas

@@ -2,15 +2,24 @@ import os
 import shutil
 import re
 import time
-import openpyxl
-from openpyxl.chart import ScatterChart, Reference, Series
 import tempfile
-from copy import copy
-from datetime import datetime
-import xlwings as xw
-from openpyxl.comments import Comment
 import sys
 import subprocess
+from copy import copy
+from datetime import datetime
+
+import openpyxl
+from openpyxl.chart import ScatterChart, Reference, Series
+from openpyxl.chart.axis import ChartLines
+from openpyxl.comments import Comment
+from openpyxl.drawing.image import Image as ExcelImage
+import xlwings as xw
+
+# --- Matplotlib for high-quality graphing ---
+import matplotlib
+matplotlib.use('Agg')  # Forces headless, thread-safe rendering for PyQt6
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 from PyQt6.QtCore import QThread, pyqtSignal
 import utils.settings as settings
@@ -87,15 +96,21 @@ class WaterCombineWorker(QThread):
         return datetime.min
 
     def run(self):
-        temp_dir = None
+        # Temp dir must always be created now to store the matplotlib generated images
+        temp_dir = tempfile.mkdtemp(prefix="mrsi_combine_tmp_")
         app = None
+        master_ref_settings = None  # Track global settings to restore later
+        
         try:
             mode = "water"
             files_data = self.params["file_list"]
             output_path = self.params["output_path"]
-            protect_originals = self.params["protect_originals"]
+            protect_originals = self.params.get("protect_originals", False)
             
-            ref_settings = settings.get_setting("REFERENCE_MATERIALS", sub_key=mode.capitalize()) or []
+            # =========================================================================
+            # SNAPSHOT MASTER SETTINGS (Don't permanently modify them)
+            # =========================================================================
+            master_ref_settings = settings.get_setting("REFERENCE_MATERIALS", sub_key=mode.capitalize()) or []
             
             total_steps = len(files_data) * 8 + 2
             current_step = 0
@@ -105,7 +120,6 @@ class WaterCombineWorker(QThread):
             combined_data = {} 
             
             if protect_originals:
-                temp_dir = tempfile.mkdtemp(prefix="mrsi_combine_tmp_")
                 self.log.emit("Working on temporary copies to protect originals.", "white")
 
             self.log.emit("Starting background Excel engine...", "white")
@@ -126,7 +140,40 @@ class WaterCombineWorker(QThread):
                 sheet_name = file_info["sheet"]
                 target_file = raw_file
                 
-                if protect_originals and temp_dir:
+                # =========================================================================
+                # FIX: BUILD A TEMPORARY RULES LIST USING EXISTING HEURISTICS
+                # =========================================================================
+                file_refs = file_info.get("references", [])
+                file_samples = file_info.get("samples", [])
+                local_ref_settings = []
+                
+                # A. Keep master references UNLESS they were explicitly dragged into Samples
+                for m_ref in master_ref_settings:
+                    m_name = str(m_ref.get("col_c", "")).strip().upper()
+                    is_in_samples = any(str(s).strip().upper() == m_name for s in file_samples)
+                    
+                    if not is_in_samples:
+                        local_ref_settings.append(m_ref)
+                        
+                # B. Add newly dragged References, but skip variants if they map to an existing base name
+                for f_ref in file_refs:
+                    # Leverage your existing normalizer function to check if this variant is already covered!
+                    mapped_name = self.get_base_reference_name(f_ref, local_ref_settings)
+                    
+                    if not mapped_name:
+                        # Truly a new reference material not matching any base standard
+                        local_ref_settings.append({
+                            "col_c": f_ref,
+                            "col_d": "", "col_e": "", "col_f": "", "col_g": "", "col_h": "",
+                            "color": "black"
+                        })
+                
+                # Apply temporarily for this file's processing steps
+                settings.set_setting("REFERENCE_MATERIALS", local_ref_settings, sub_key=mode.capitalize())
+                ref_settings = local_ref_settings 
+                # =========================================================================
+
+                if protect_originals:
                     filename = os.path.basename(raw_file)
                     target_file = os.path.join(temp_dir, f"{idx}_{filename}")
                     shutil.copy(raw_file, target_file)
@@ -178,17 +225,15 @@ class WaterCombineWorker(QThread):
                         data_header_row = r
                         break
 
-                # --- WATER EXTRACTION LOGIC (FIX 1 & 2: Dynamic Width) ---
-                # Discover the furthest column dynamically based on the Green Box contents
                 max_data_col = 17 
                 for r in range(1, max(2, data_header_row)):
-                    for c in range(100, 17, -1): # Scan backwards from 100 to catch any slope groups
+                    for c in range(100, 17, -1):
                         if ws.cell(row=r, column=c).value is not None:
                             if c > max_data_col:
                                 max_data_col = c
                             break
                 
-                max_col_to_copy = max_data_col + 1 # Include 1 extra buffer column
+                max_col_to_copy = max_data_col + 1
                 
                 end_green_box = max(15, data_header_row - 1)
                 file_green_box = []
@@ -263,8 +308,14 @@ class WaterCombineWorker(QThread):
             self.log.emit("=" * 40, "white")
             self.log.emit(f"Compiling {len(combined_data)} Standard sheets...", "white")
             
-            out_wb = openpyxl.Workbook()
-            out_wb.remove(out_wb.active) 
+            append_mode = self.params.get("append_mode", False)
+            
+            if append_mode and os.path.exists(output_path):
+                self.log.emit(f"Loading existing file to append and sort data: {os.path.basename(output_path)}", "white")
+                out_wb = openpyxl.load_workbook(output_path)
+            else:
+                out_wb = openpyxl.Workbook()
+                out_wb.remove(out_wb.active) 
             
             grey_fill = openpyxl.styles.PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
             black_font = openpyxl.styles.Font(bold=True, color="000000")
@@ -275,14 +326,22 @@ class WaterCombineWorker(QThread):
                 "black": "000000"
             }
 
-            # --- WATER COMPILATION LOGIC ---
+            # =======================================================
+            # COMPILATION: CHRONOLOGICAL INJECTION & GRAPH REBUILDING
+            # =======================================================
             for mat_name, files_data_list in combined_data.items():
                 clean_title = str(mat_name)[:31] 
-                ws_out = out_wb.create_sheet(title=clean_title)
+                
+                is_new_sheet = False
+                if clean_title in out_wb.sheetnames:
+                    ws_out = out_wb[clean_title]
+                else:
+                    ws_out = out_wb.create_sheet(title=clean_title)
+                    is_new_sheet = True
+                    ws_out.freeze_panes = "A2"
                 
                 files_data_list.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
                 
-                # Retrieve color mapping for charting
                 mat_color = "000000"
                 for std in ref_settings:
                     if std.get("col_c") == mat_name:
@@ -290,139 +349,370 @@ class WaterCombineWorker(QThread):
                         mat_color = color_hex_map.get(c_name, "000000")
                         break
                 
-                if files_data_list and files_data_list[0]['data_header']:
+                if is_new_sheet and files_data_list and files_data_list[0]['data_header']:
                     for c_idx, src_cell in enumerate(files_data_list[0]['data_header']):
                         tgt_cell = ws_out.cell(row=1, column=1 + c_idx)
                         self.copy_cell_exact(src_cell, tgt_cell)
                 
-                ws_out.freeze_panes = "A2"
-                current_out_row = 2
+                divider_width = 17 # Fixed width for the Data From row
                 
-                # Keep track of where the data was pasted for graphing later
-                file_data_chunks = []
-                
-                for file_data in files_data_list:
-                    current_width = len(file_data['data_header'])
-                    offset_col = current_width + 2
-                    
-                    ws_out.merge_cells(start_row=current_out_row, start_column=1, end_row=current_out_row, end_column=current_width)
-                    div_cell = ws_out.cell(row=current_out_row, column=1, value=f"Data from: {file_data['filename']}")
-                    div_cell.fill = grey_fill
-                    div_cell.font = black_font
-                    div_cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
-                    
-                    for c in range(1, current_width + 1):
-                        ws_out.cell(row=current_out_row, column=c).fill = grey_fill
+                # ---------------------------------------------------------
+                # BLOCK 1: WRITING & INJECTING DATA CHRONOLOGICALLY
+                # ---------------------------------------------------------
+                if is_new_sheet:
+                    current_out_row = 2
+                    for file_data in files_data_list:
+                        current_width = len(file_data['data_header'])
+                        offset_col = current_width + 2
                         
-                    current_out_row += 1
-                    start_data_row = current_out_row
-                    
-                    # 1. Write the full dynamic width data block
-                    for r_idx, row_cells in enumerate(file_data['block_rows']):
-                        for c_idx, src_cell in enumerate(row_cells):
-                            tgt_cell = ws_out.cell(row=start_data_row + r_idx, column=1 + c_idx)
-                            self.copy_cell_exact(src_cell, tgt_cell)
+                        # Set perfect 17-column divider
+                        ws_out.merge_cells(start_row=current_out_row, start_column=1, end_row=current_out_row, end_column=divider_width)
+                        div_cell = ws_out.cell(row=current_out_row, column=1, value=f"Data from: {file_data['filename']}")
+                        div_cell.fill = grey_fill
+                        div_cell.font = black_font
+                        div_cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+                        for c in range(1, divider_width + 1):
+                            ws_out.cell(row=current_out_row, column=c).fill = grey_fill
                             
-                    # 2. Write the green box off to the right (at offset_col)
-                    for r_idx, row_cells in enumerate(file_data['green_box']):
-                        for c_idx, src_cell in enumerate(row_cells):
-                            tgt_cell = ws_out.cell(row=start_data_row + r_idx, column=offset_col + c_idx)
-                            self.copy_cell_exact(src_cell, tgt_cell)
-                            
-                    end_data_row = start_data_row + len(file_data['block_rows']) - 1
-                    if end_data_row >= start_data_row:
-                        file_data_chunks.append((start_data_row, end_data_row))
-                            
-                    max_written = max(
-                        end_data_row,
-                        start_data_row + len(file_data['green_box']) - 1
-                    )
-                    
-                    current_out_row = max_written + 3 # Add a 2 row gap
-                    
-                for c in range(1, offset_col + current_width):
-                    ws_out.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 15
+                        current_out_row += 1
+                        start_data_row = current_out_row
+                        
+                        for r_idx, row_cells in enumerate(file_data['block_rows']):
+                            for c_idx, src_cell in enumerate(row_cells):
+                                tgt_cell = ws_out.cell(row=start_data_row + r_idx, column=1 + c_idx)
+                                self.copy_cell_exact(src_cell, tgt_cell)
+                                
+                        for r_idx, row_cells in enumerate(file_data['green_box']):
+                            for c_idx, src_cell in enumerate(row_cells):
+                                tgt_cell = ws_out.cell(row=start_data_row + r_idx, column=offset_col + c_idx)
+                                self.copy_cell_exact(src_cell, tgt_cell)
+                                
+                        end_data_row = start_data_row + len(file_data['block_rows']) - 1
+                        
+                        max_written = max(end_data_row, start_data_row + len(file_data['green_box']) - 1)
+                        current_out_row = max_written + 3 
+                        
+                    for c in range(1, offset_col + current_width):
+                        ws_out.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 15
 
-                # =======================================================
-                # FIX 3: LINE CHARTS GENERATION
-                # =======================================================
-                columns_to_graph = [
+                else:
+                    # Append Mode: Dynamically inject blocks in chronological order
+                    ws_out._charts = [] # Clear old charts to prevent corruption
+                    
+                    existing_blocks = []
+                    for r in range(2, ws_out.max_row + 1):
+                        val = ws_out.cell(row=r, column=1).value
+                        if isinstance(val, str) and val.startswith("Data from:"):
+                            ts_val = ws_out.cell(row=r+1, column=2).value
+                            ts = self.parse_timestamp(ts_val)
+                            existing_blocks.append({'start_row': r, 'timestamp': ts})
+                    
+                    last_real_row = 2
+                    for r in range(ws_out.max_row, 1, -1):
+                        v1 = ws_out.cell(row=r, column=1).value
+                        v2 = ws_out.cell(row=r, column=2).value
+                        if (v1 and str(v1).strip() != "") or (v2 and str(v2).strip() != ""):
+                            last_real_row = r
+                            break
+                    
+                    for file_data in files_data_list:
+                        new_ts = file_data['timestamp'] or datetime.min
+                        
+                        insert_idx = last_real_row + 3 
+                        
+                        for eb in existing_blocks:
+                            if eb['timestamp'] > new_ts:
+                                insert_idx = eb['start_row']
+                                break
+                        
+                        block_height = len(file_data['block_rows'])
+                        green_box_height = len(file_data['green_box'])
+                        total_height_needed = max(block_height, green_box_height) + 3
+                        
+                        if insert_idx <= last_real_row:
+                            ws_out.insert_rows(insert_idx, amount=total_height_needed)
+                            for eb in existing_blocks:
+                                if eb['start_row'] >= insert_idx:
+                                    eb['start_row'] += total_height_needed
+                            last_real_row += total_height_needed
+                        else:
+                            last_real_row += total_height_needed
+                        
+                        current_width = len(file_data['data_header'])
+                        offset_col = current_width + 2
+                        
+                        div_cell = ws_out.cell(row=insert_idx, column=1, value=f"Data from: {file_data['filename']}")
+                        div_cell.fill = grey_fill
+                        div_cell.font = black_font
+                        div_cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+                        for c in range(1, divider_width + 1):
+                            ws_out.cell(row=insert_idx, column=c).fill = grey_fill
+                            
+                        start_data_row = insert_idx + 1
+                        
+                        for r_idx, row_cells in enumerate(file_data['block_rows']):
+                            for c_idx, src_cell in enumerate(row_cells):
+                                tgt_cell = ws_out.cell(row=start_data_row + r_idx, column=1 + c_idx)
+                                self.copy_cell_exact(src_cell, tgt_cell)
+                                
+                        for r_idx, row_cells in enumerate(file_data['green_box']):
+                            for c_idx, src_cell in enumerate(row_cells):
+                                tgt_cell = ws_out.cell(row=start_data_row + r_idx, column=offset_col + c_idx)
+                                self.copy_cell_exact(src_cell, tgt_cell)
+
+                # BLOCK 1.5: CLEAN MERGING SWEEP (Fixes OpenPyXL format bugs)
+                divider_width = 17 
+                
+                # Unmerge any remaining corrupted cells to prevent errors
+                for m_range in list(ws_out.merged_cells.ranges):
+                    try:
+                        ws_out.unmerge_cells(str(m_range))
+                    except Exception:
+                        pass
+                
+                # Re-apply the merge and grey styling to every single header row perfectly
+                for r in range(2, ws_out.max_row + 1):
+                    val = ws_out.cell(row=r, column=1).value
+                    if isinstance(val, str) and val.startswith("Data from:"):
+                        ws_out.merge_cells(start_row=r, start_column=1, end_row=r, end_column=divider_width)
+                        for c in range(1, divider_width + 1):
+                            cell = ws_out.cell(row=r, column=c)
+                            cell.fill = grey_fill
+                            if c == 1:
+                                cell.font = black_font
+                                cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+
+                # BLOCK 2: UNIFIED CHARTS (EXCEL NATIVE + MATPLOTLIB)
+                real_max_row = 1
+                for r in range(ws_out.max_row, 0, -1):
+                    row_has_data = False
+                    for c in range(1, 40):
+                        val = ws_out.cell(row=r, column=c).value
+                        if val is not None and str(val).strip() != "":
+                            row_has_data = True
+                            break
+                    if row_has_data:
+                        real_max_row = r
+                        break
+
+                # Ensure Time Codes in Column B are actual datetime objects
+                for r in range(2, real_max_row + 1):
+                    val_b = ws_out.cell(row=r, column=2).value
+                    if isinstance(val_b, str):
+                        try:
+                            match = re.search(r'(\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}:\d{2})', val_b)
+                            if match:
+                                dt_val = datetime.strptime(match.group(1).replace('-', '/'), "%Y/%m/%d %H:%M:%S")
+                                ws_out.cell(row=r, column=2).value = dt_val
+                                ws_out.cell(row=r, column=2).number_format = 'yyyy/mm/dd'
+                        except:
+                            pass
+
+                all_data_chunks = []
+                current_start = None
+                
+                for r in range(2, real_max_row + 1):
+                    val_b = ws_out.cell(row=r, column=2).value
+                    is_valid_time = isinstance(val_b, datetime) or (isinstance(val_b, str) and re.search(r'\d{4}[-/]\d{2}', str(val_b)))
+                    
+                    if is_valid_time:
+                        if current_start is None:
+                            current_start = r
+                    else:
+                        if current_start is not None:
+                            all_data_chunks.append((current_start, r - 1))
+                            current_start = None
+                            
+                if current_start is not None:
+                    all_data_chunks.append((current_start, real_max_row))
+
+                raw_columns = [
                     (11, "δ¹³C RAW"),
                     (14, "δ¹⁸O RAW")
                 ]
                 
-                # Dynamically find calculation columns (Starting from Col V / index 21)
-                if files_data_list and files_data_list[0]['data_header']:
-                    header_cells = files_data_list[0]['data_header']
-                    for i in range(21, len(header_cells)):
-                        val = header_cells[i].value
-                        if val and str(val).strip():
-                            hdr_text = str(val).strip()
-                            if hdr_text.upper() not in ["STDEV", "N"]:
-                                col_idx = i + 1
-                                columns_to_graph.append((col_idx, f"δ¹⁸O Normalized ({hdr_text})"))
+                norm_columns = []
+                for i in range(21, 100):
+                    val = ws_out.cell(row=1, column=i).value
+                    if val and str(val).strip():
+                        hdr_text = str(val).strip()
+                        if hdr_text.upper() not in ["STDEV", "N"]:
+                            norm_columns.append((i, f"δ¹⁸O Normalized ({hdr_text})"))
 
-                chart_col_offset = 3 
-                chart_row = current_out_row + 2
+                # PART A: EXCEL INTERACTIVE CHARTS
+                chart_start_row = real_max_row + 2
+                chart_height = 14 
+                chart_width = 22 
+                col_spacing = 12  
+                row_spacing = 30  # Increased to prevent overlap
                 
-                for col_idx, chart_title in columns_to_graph:
+                excel_charts_to_plot = []
+                
+                # Top Row: RAW charts side-by-side
+                for idx, (col_idx, title) in enumerate(raw_columns):
+                    col_pos = 3 + (idx * col_spacing)
+                    excel_charts_to_plot.append((col_idx, title, chart_start_row, col_pos))
+                    
+                # Lower Rows: Normalized charts stacked in 2-column grid
+                norm_start_row = chart_start_row + row_spacing
+                for idx, (col_idx, title) in enumerate(norm_columns):
+                    row_pos = norm_start_row + (idx // 2) * row_spacing
+                    col_pos = 3 + (idx % 2) * col_spacing
+                    excel_charts_to_plot.append((col_idx, title, row_pos, col_pos))
+
+                max_excel_chart_row = chart_start_row
+
+                for col_idx, chart_title, c_row, c_col in excel_charts_to_plot:
                     chart = ScatterChart()
                     chart.title = chart_title
-                    chart.style = 13 
-                    chart.x_axis.title = "Time"
-                    chart.y_axis.title = chart_title
-                    chart.scatterStyle = "line" # Forces the connecting lines
-                    chart.legend = None # Prevent legend bloat
                     
+                    chart.x_axis.title = "Date"
+                    chart.y_axis.title = chart_title
+                    chart.legend = None 
+                    chart.height = chart_height
+                    chart.width = chart_width
+                    
+                    chart.x_axis.majorGridlines = ChartLines()
+                    chart.y_axis.majorGridlines = ChartLines()
+                    
+                    chart.x_axis.tickLblPos = "nextTo"
+                    chart.y_axis.tickLblPos = "nextTo"
+                    chart.x_axis.majorTickMark = "out"
+                    chart.y_axis.majorTickMark = "out"
+                    
+                    chart.y_axis.numFmt = "0.00"
+                    chart.y_axis.numFmtLinked = False
+                    chart.x_axis.number_format = 'yyyy/mm/dd'
+                    chart.x_axis.numFmtLinked = False
+                    
+                    y_values_list = []
                     has_data = False
                     
-                    for chunk in file_data_chunks:
+                    for chunk in all_data_chunks:
                         s_row, e_row = chunk
-                        
-                        # Find continuous blocks of data holding a VALID timestamp
-                        # This skips over blank rows, average rows, and text rows gracefully
                         valid_ranges = []
-                        current_start = None
+                        c_start = None
                         
                         for r in range(s_row, e_row + 1):
-                            val_b = ws_out.cell(row=r, column=2).value
                             val_y = ws_out.cell(row=r, column=col_idx).value
-                            
-                            is_valid_time = isinstance(val_b, datetime) or (isinstance(val_b, str) and re.search(r'\d{4}[-/]\d{2}', val_b))
-                            is_valid_y = isinstance(val_y, (int, float))
-                            
-                            if is_valid_time and is_valid_y:
-                                if current_start is None:
-                                    current_start = r
+                            if isinstance(val_y, (int, float)):
+                                y_values_list.append(val_y)
+                                if c_start is None:
+                                    c_start = r
                             else:
-                                if current_start is not None:
-                                    valid_ranges.append((current_start, r - 1))
-                                    current_start = None
+                                if c_start is not None:
+                                    valid_ranges.append((c_start, r - 1))
+                                    c_start = None
                         
-                        if current_start is not None:
-                            valid_ranges.append((current_start, e_row))
+                        if c_start is not None:
+                            valid_ranges.append((c_start, e_row))
                             
-                        # Create series for each continuous block using references 
                         for sub_s, sub_e in valid_ranges:
                             xvalues = Reference(ws_out, min_col=2, min_row=sub_s, max_row=sub_e)
                             yvalues = Reference(ws_out, min_col=col_idx, min_row=sub_s, max_row=sub_e)
                             
                             series = Series(values=yvalues, xvalues=xvalues, title_from_data=False)
                             
-                            # Apply precise styling to match the standard
-                            line_prop = series.graphicalProperties.line
-                            line_prop.solidFill = mat_color
+                            series.graphicalProperties.line.noFill = True
+                            
                             series.marker.symbol = "circle"
+                            series.marker.size = 5
                             series.marker.graphicalProperties.solidFill = mat_color
                             series.marker.graphicalProperties.line.solidFill = mat_color
                             
                             chart.series.append(series)
                             has_data = True
                             
+                    # Calculate Y-Axis padding (Generous 40% margin)
+                    if y_values_list:
+                        min_y = min(y_values_list)
+                        max_y = max(y_values_list)
+                        y_range = max_y - min_y
+                        
+                        if y_range == 0:
+                            padding = abs(min_y) * 0.1 if min_y != 0 else 1.0
+                        else:
+                            padding = y_range * 0.40  # 40% margin above and below
+                            
+                        chart.y_axis.scaling.min = round(min_y - padding, 2)
+                        chart.y_axis.scaling.max = round(max_y + padding, 2)
+                            
                     if has_data:
-                        col_letter = openpyxl.utils.get_column_letter(chart_col_offset)
-                        ws_out.add_chart(chart, f"{col_letter}{chart_row}")
-                        chart_col_offset += 6 # Push the next chart sideways by 6 columns
+                        col_letter = openpyxl.utils.get_column_letter(c_col)
+                        ws_out.add_chart(chart, f"{col_letter}{c_row}")
+                        if c_row > max_excel_chart_row:
+                            max_excel_chart_row = c_row
+
+                # PART B: MATPLOTLIB STATIC IMAGE CHARTS
+                mpl_start_row = max_excel_chart_row + row_spacing + 5
+                mpl_col_spacing = 12  
+                mpl_row_spacing = 32  # Increased to prevent overlap
+                
+                mpl_charts_to_plot = []
+                
+                for idx, (col_idx, title) in enumerate(raw_columns):
+                    col_pos = 3 + (idx * mpl_col_spacing)
+                    mpl_charts_to_plot.append((col_idx, title, mpl_start_row, col_pos))
+                    
+                mpl_norm_start_row = mpl_start_row + mpl_row_spacing
+                for idx, (col_idx, title) in enumerate(norm_columns):
+                    row_pos = mpl_norm_start_row + (idx // 2) * mpl_row_spacing
+                    col_pos = 3 + (idx % 2) * mpl_col_spacing
+                    mpl_charts_to_plot.append((col_idx, title, row_pos, col_pos))
+
+                max_mpl_chart_row = mpl_start_row
+                hex_color = f"#{mat_color}" if not mat_color.startswith("#") else mat_color
+
+                for col_idx, chart_title, c_row, c_col in mpl_charts_to_plot:
+                    x_data = []
+                    y_data = []
+                    
+                    for chunk in all_data_chunks:
+                        s_row, e_row = chunk
+                        for r in range(s_row, e_row + 1):
+                            val_y = ws_out.cell(row=r, column=col_idx).value
+                            val_x = ws_out.cell(row=r, column=2).value
+                            
+                            if isinstance(val_y, (int, float)) and isinstance(val_x, datetime):
+                                x_data.append(val_x)
+                                y_data.append(val_y)
+                                
+                    if x_data and y_data:
+                        fig, ax = plt.subplots(figsize=(9, 5))
+                        ax.scatter(x_data, y_data, color=hex_color, s=40, zorder=3)
+                        
+                        ax.set_title(f"{chart_title}", fontsize=12, fontweight='bold')
+                        ax.set_xlabel("Date", fontsize=10, fontweight='bold')
+                        ax.set_ylabel(chart_title, fontsize=10, fontweight='bold')
+                        
+                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y/%m/%d'))
+                        fig.autofmt_xdate(rotation=45)
+                        
+                        ax.grid(True, linestyle='--', alpha=0.7, zorder=0)
+                        
+                        # Generous 40% Padding for Matplotlib Y-Axis
+                        min_y, max_y = min(y_data), max(y_data)
+                        y_range = max_y - min_y
+                        pad = y_range * 0.40 if y_range != 0 else abs(min_y) * 0.1
+                        ax.set_ylim(min_y - pad, max_y + pad)
+                        
+                        fig.tight_layout()
+                        
+                        img_filename = f"chart_img_{mat_name}_{col_idx}.png"
+                        safe_filename = "".join([c for c in img_filename if c.isalpha() or c.isdigit() or c in (' ', '.', '_')]).rstrip()
+                        img_path = os.path.join(temp_dir, safe_filename)
+                        
+                        fig.savefig(img_path, dpi=100)
+                        plt.close(fig) 
+                        
+                        col_letter = openpyxl.utils.get_column_letter(c_col)
+                        img = ExcelImage(img_path)
+                        ws_out.add_image(img, f"{col_letter}{c_row}")
+                        
+                        if c_row > max_mpl_chart_row:
+                            max_mpl_chart_row = c_row
+
+                ws_out.cell(row=max_mpl_chart_row + mpl_row_spacing + 5, column=1).value = " "
 
             out_wb.save(output_path)
             self.log.emit("-" * 50, "white")
@@ -448,6 +738,13 @@ class WaterCombineWorker(QThread):
             self.error.emit(str(e))
             
         finally:
+            # =========================================================================
+            # RESTORE GLOBAL SETTINGS ONCE DONE
+            # =========================================================================
+            if 'master_ref_settings' in locals() and master_ref_settings is not None:
+                settings.set_setting("REFERENCE_MATERIALS", master_ref_settings, sub_key=mode.capitalize())
+            # =========================================================================
+
             if app:
                 try:
                     app.quit()

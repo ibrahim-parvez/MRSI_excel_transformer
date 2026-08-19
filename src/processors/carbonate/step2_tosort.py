@@ -67,8 +67,8 @@ def step2_tosort_carbonate(file_path, filter_choice="Last 6"):
         print("If 'Data' contains formulas without cached values, 'To Sort' may have empty cells for those formulas.")
 
     # Load two workbook views:
-    wb = load_workbook(file_path, data_only=False)
-    wb_values = load_workbook(file_path, data_only=True)
+    wb = load_workbook(file_path, data_only=False, keep_links=False)
+    wb_values = load_workbook(file_path, data_only=True, keep_links=False)
 
     if source_sheet not in wb.sheetnames:
         raise ValueError(f"Sheet '{source_sheet}' not found in workbook. Run Step 1 first.")
@@ -79,8 +79,19 @@ def step2_tosort_carbonate(file_path, filter_choice="Last 6"):
     if new_sheet_name in wb.sheetnames:
         del wb[new_sheet_name]
 
+    # --- Remove only broken/ghost named ranges ---
+    if hasattr(wb, 'defined_names') and hasattr(wb.defined_names, 'definedName'):
+        valid_names = []
+        for dn in wb.defined_names.definedName:
+            val = str(dn.value) if dn.value else ""
+            # Drop ranges pointing to the deleted sheet or broken #REF! errors
+            if new_sheet_name in val or '#REF!' in val:
+                continue
+            valid_names.append(dn)
+        wb.defined_names.definedName = valid_names
+
     ws_source = wb[source_sheet]                 
-    ws_source_values = wb_values[source_sheet]   
+    ws_source_values = wb_values[source_sheet]  
 
     # Create To Sort sheet
     ws_new = wb.create_sheet(new_sheet_name, index=wb.index(ws_source))
