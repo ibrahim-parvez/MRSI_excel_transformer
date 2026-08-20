@@ -11,6 +11,7 @@ import statistics
 import utils.settings as settings
 from utils.common_utils import embed_settings_popup
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
+from openpyxl.worksheet.formula import ArrayFormula
 
 # --- Helper Functions ---
 def _normalize_text(text):
@@ -75,33 +76,23 @@ def _make_fill(hex_color):
     return PatternFill(start_color=c, end_color=c, fill_type="solid")
 
 def get_excel_range(col_let, rows):
-    """Converts a list of row numbers into a valid Excel contiguous or multi-area range string."""
+    """Converts a list of row numbers into a valid Excel range string. Uses CHOOSE for non-contiguous."""
     if not rows:
         return ""
     rows = sorted(list(set(rows)))
-    blocks = []
-    start = rows[0]
-    prev = rows[0]
-    for r in rows[1:]:
-        if r == prev + 1:
-            prev = r
-        else:
-            blocks.append((start, prev))
-            start = r
-            prev = r
-    blocks.append((start, prev))
     
-    range_strs = []
-    for s, e in blocks:
-        if s == e:
-            range_strs.append(f"{col_let}{s}")
+    # Check if rows are perfectly continuous
+    is_continuous = all(rows[i] == rows[i-1] + 1 for i in range(1, len(rows)))
+    if is_continuous:
+        if len(rows) == 1:
+            return f"{col_let}{rows[0]}"
         else:
-            range_strs.append(f"{col_let}{s}:{col_let}{e}")
-            
-    if len(range_strs) == 1:
-        return range_strs[0]
-    else:
-        return f"_xlfn.VSTACK({','.join(range_strs)})"
+            return f"{col_let}{rows[0]}:{col_let}{rows[-1]}"
+
+    # Workaround for non-continuous arrays compatible with older Excel versions
+    indices = "{" + ",".join(str(i+1) for i in range(len(rows))) + "}"
+    cells = ",".join(f"{col_let}{r}" for r in rows)
+    return f"CHOOSE({indices},{cells})"
 
 def _get_valid_co2_rows(rows, col_identifier1):
     valid_indices = []
@@ -420,10 +411,21 @@ def populate_blue_box_math(ws, slope_info, mat_row_map, offset_col=0, setting_ke
             range_o_pub = get_excel_range(get_column_letter(7 + offset_col), rows)
             range_o_meas = get_excel_range(get_column_letter(14 + offset_col), rows)
             
-            ws.cell(row=current_slope_row, column=11 + offset_col, value=f'=SLOPE({range_y_pub},{range_x_meas})')
-            ws.cell(row=current_slope_row+1, column=11 + offset_col, value=f'=INTERCEPT({range_y_pub},{range_x_meas})')
-            ws.cell(row=current_slope_row, column=14 + offset_col, value=f'=SLOPE({range_o_pub},{range_o_meas})')
-            ws.cell(row=current_slope_row+1, column=14 + offset_col, value=f'=INTERCEPT({range_o_pub},{range_o_meas})')
+            # Carbonate/CO2 Array Formulas (Ctrl+Shift+Enter automation)
+            col_11_let = get_column_letter(11 + offset_col)
+            col_14_let = get_column_letter(14 + offset_col)
+
+            ws.cell(row=current_slope_row, column=11 + offset_col).value = ArrayFormula(
+                f"{col_11_let}{current_slope_row}", f'=SLOPE({range_y_pub},{range_x_meas})')
+                
+            ws.cell(row=current_slope_row+1, column=11 + offset_col).value = ArrayFormula(
+                f"{col_11_let}{current_slope_row+1}", f'=INTERCEPT({range_y_pub},{range_x_meas})')
+                
+            ws.cell(row=current_slope_row, column=14 + offset_col).value = ArrayFormula(
+                f"{col_14_let}{current_slope_row}", f'=SLOPE({range_o_pub},{range_o_meas})')
+                
+            ws.cell(row=current_slope_row+1, column=14 + offset_col).value = ArrayFormula(
+                f"{col_14_let}{current_slope_row+1}", f'=INTERCEPT({range_o_pub},{range_o_meas})')
 
 def draw_yield_table(ws, start_col, box_fill, num_yield_groups):
     max_yield_row = 19 + (num_yield_groups * 3)
@@ -1527,15 +1529,21 @@ def step6_normalization_carbonate(file_path):
                 range_y = get_excel_range(get_column_letter(theo_col), group_rows)
                 range_x = get_excel_range('Q', group_rows)
                 
-                cell_slope = ws_group.cell(row=yield_slope_row, column=col_AL, value=f'=SLOPE({range_y},{range_x})')
+                col_AL_let = get_column_letter(col_AL)
+
+                # Yield Slope Array Formula
+                cell_slope = ws_group.cell(row=yield_slope_row, column=col_AL)
+                cell_slope.value = ArrayFormula(f"{col_AL_let}{yield_slope_row}", f'=SLOPE({range_y},{range_x})')
                 cell_slope.number_format = '0.00E+00'
                 cell_slope.font = Font(bold=True)
                 
-                cell_int = ws_group.cell(row=yield_slope_row+1, column=col_AL, value=f'=INTERCEPT({range_y},{range_x})')
+                # Yield Intercept Array Formula
+                cell_int = ws_group.cell(row=yield_slope_row+1, column=col_AL)
+                cell_int.value = ArrayFormula(f"{col_AL_let}{yield_slope_row+1}", f'=INTERCEPT({range_y},{range_x})')
                 cell_int.number_format = '0.00E+00'
                 cell_int.font = Font(bold=True)
                 
-                yield_slope_row += 3 
+                yield_slope_row += 3
             
     start_gray_row = header_row + 1 
     max_sheet_row = ws_group.max_row + 50
