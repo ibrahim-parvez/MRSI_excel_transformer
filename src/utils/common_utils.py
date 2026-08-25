@@ -2,19 +2,22 @@ from openpyxl.comments import Comment
 from openpyxl.styles import Font, Alignment
 import utils.settings as settings
 
+# Map the UI labels to their actual backend values
+#sigma_opts = [("1σ", 1), ("2σ", 2), ("3σ", 3)]
+
 def embed_settings_popup(ws, cell_coordinate="AB1", show_popup=True):
     """
     Embeds specific calculation settings into a cell as a clean, hoverable Excel comment.
-    If show_popup is False, the function exits without doing anything.
+    Uses safe ASCII characters to ensure line-heights render identically on Windows and Mac.
+    Dynamically appends Yield and CO2 settings if they are enabled.
     """
     if not show_popup:
         return 
 
     config = settings._SETTINGS_CONFIG
     
-    # Helper to format options like a radio button list
     def format_opts(options, selected_val):
-        return "\n".join([f"  {'◉' if opt_val == selected_val else '○'} {opt_label}" 
+        return "\n".join([f"  {'[x]' if opt_val == selected_val else '[  ]'} {opt_label}" 
                           for opt_label, opt_val in options])
 
     # Map the UI labels to their actual backend values
@@ -50,20 +53,45 @@ def embed_settings_popup(ws, cell_coordinate="AB1", show_popup=True):
         "Exclusion Logic:\n"
         f"{format_opts(excl_opts, config.get('OUTLIER_EXCLUSION_MODE'))}\n\n"
         
-        "Measured 𝛅 values (Step 3):\n"
+        "Measured Delta values (Step 3):\n"
         f"{format_opts(step3_opts, config.get('CALC_MODE_STEP3'))}\n\n"
         
         "Average for RM (Step 7):\n"
         f"{format_opts(step7_opts, config.get('CALC_MODE_STEP7'))}"
     )
+
+    # --- DYNAMIC SECTIONS ---
+    calc_yield = config.get('CALC_YIELD', False)
+    calc_co2 = config.get('CALC_CO2', False)
     
-    # CRITICAL FIX: Use "pt" instead of "px". 
+    added_height = 0
+    
+    if calc_yield:
+        # Fetch compound settings, falling back to defaults if not found
+        yield_comps = config.get('YIELD_COMPOUNDS', {"ref": "CaCO3", "samp": "MnCO3"})
+        clean_text += (
+            "\n\n--- Yield Settings ---\n"
+            f"  • Ref Compound: {yield_comps.get('ref', 'Unknown')}\n"
+            f"  • Sample Compound: {yield_comps.get('samp', 'Unknown')}"
+        )
+        added_height += 65 # Increase box height to fit this text
+        
+    if calc_co2:
+        co2_temp = config.get('CO2_TEMP_MODE', 'Custom')
+        clean_text += (
+            "\n\n--- CO2 Settings ---\n"
+            f"  • Temp Mode: {co2_temp}"
+        )
+        added_height += 50 # Increase box height to fit this text
+
+    total_height = 320 + added_height
+    
     # Windows Excel VML ignores px and collapses the box. pt (points) works cross-platform.
     settings_comment = Comment(
         text=clean_text, 
         author="DNT", 
         width="250pt",  
-        height="320pt"  
+        height=f"{total_height}pt"  
     )
     
     # Target the cell, set the text, and attach the comment

@@ -6,8 +6,6 @@ _SETTINGS_CONFIG = {
     # UI Toggles
     "ENABLE_FREEZE_PANE": True,
     "CO2_TEMP_MODE": "25 °C",
-    #"ENABLE_YIELD_CALC": False,
-    #"ENABLE_CO2_CALC": False,
 
     # Toggle for Stdev
     "STDEV_THRESHOLD_ENABLED": False,
