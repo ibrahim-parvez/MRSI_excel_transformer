@@ -6,6 +6,9 @@ _SETTINGS_CONFIG = {
     # UI Toggles
     "ENABLE_FREEZE_PANE": True,
     "CO2_TEMP_MODE": "25 °C",
+    # Free-text label the user types for the Custom CO2 profile (e.g. "70 °C").
+    # Empty means fall back to the generic "Custom Temp" wording.
+    "CO2_CUSTOM_LABEL": "",
 
     # Toggle for Stdev
     "STDEV_THRESHOLD_ENABLED": False,

@@ -6,7 +6,7 @@ from openpyxl.styles import PatternFill, Font, NamedStyle
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.worksheet.views import Selection
 import utils.settings as settings
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 
 def step1_data_carbonate(file_path, sheet_name='ExportGB2.wke'):
@@ -34,6 +34,16 @@ def step1_data_carbonate(file_path, sheet_name='ExportGB2.wke'):
     exclusion_mode = settings.get_setting("OUTLIER_EXCLUSION_MODE") or "Individual"
 
     new_sheet_name = 'Data_DNT'
+
+    # The sheets this tool generates all end in "_DNT" and are never valid raw
+    # input. Reading from one is either a crash (Step 1 deletes 'Data_DNT'
+    # before reading it, so picking it raises "Worksheet does not exist") or
+    # silent nonsense (normalised output re-processed as raw data).
+    if str(sheet_name).strip().endswith("_DNT"):
+        raise ValueError(
+            f"'{sheet_name}' is a sheet this tool generates, not raw data. "
+            f"Choose the original data sheet from the instrument export."
+        )
 
     # --- READ DATA WITH ROBUST HEADER FINDING ---
     try:
@@ -200,6 +210,17 @@ def step1_data_carbonate(file_path, sheet_name='ExportGB2.wke'):
     group_highlight_ranges = []
     group_spacer_rows = []
     all_delta_rows = []
+
+    # Fail with a readable message instead of a bare KeyError deep in pandas
+    # when the raw export does not have the columns this step groups on.
+    _required = ['Identifier 1', 'Time Code']
+    _missing = [c for c in _required if c not in df.columns]
+    if _missing:
+        _found = ", ".join(str(c) for c in list(df.columns)[:15])
+        raise ValueError(
+            f"Required column(s) missing from sheet '{sheet_name}': "
+            f"{', '.join(_missing)}. Columns found: {_found}"
+        )
 
     grouped = df.groupby(['Row', 'Identifier 1', 'Time Code'], sort=False)
 
@@ -507,5 +528,5 @@ def step1_data_carbonate(file_path, sheet_name='ExportGB2.wke'):
     # Set column width for Q (Calculations Label)
     ws.column_dimensions["Q"].width = 18
 
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"Step 1: Data completed on {file_path}")

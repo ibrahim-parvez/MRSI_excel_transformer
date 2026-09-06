@@ -98,11 +98,16 @@ class WaterTab(QWidget):
             row.setSpacing(6)
             
             if "Step 3" in step_name:
-                cb = QCheckBox() 
+                # Step 3 uses a real QCheckBox carrying its own text, like
+                # every other step, so Qt applies the platform's own
+                # indicator-to-text spacing and all the rows line up.
+                # The red "Outliers Excluded" suffix sits in its own label
+                # after the checkbox, since QCheckBox cannot render rich text.
+                cb = QCheckBox(step_name)
                 self.step_cbs.append(cb)
                 row.addWidget(cb)
                 
-                self.step3_label = QLabel(step_name)
+                self.step3_label = QLabel("")
                 self.step3_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
                 row.addWidget(self.step3_label)
                 
@@ -231,6 +236,12 @@ class WaterTab(QWidget):
 
     def _on_sheet_fetched(self, file_path, sheet_name):
         """Slot triggered when the SheetFetcherWorker completes."""
+        # Dropping files quickly leaves several workers running at once, and
+        # they finish in whatever order the reads complete. Ignore results for
+        # anything but the file currently loaded, or a slow read of an older
+        # file overwrites the sheet name of the newest one.
+        if file_path != self.current_file_path:
+            return
         self.sheet_entry.setText(sheet_name)
         self.fetch_unique_materials()
 
@@ -244,11 +255,14 @@ class WaterTab(QWidget):
             
         sheet_name = self.sheet_entry.text().strip()
         
+        wb = None
         try:
+            # A read_only workbook holds an open file handle. On Windows that
+            # keeps the file locked, so it must be closed on EVERY path - the
+            # error path included - or later steps cannot write to the file.
             wb = openpyxl.load_workbook(self.current_file_path, read_only=True, data_only=True)
             if sheet_name not in wb.sheetnames:
                 QMessageBox.warning(self, "Sheet Error", f"Sheet '{sheet_name}' not found in file.")
-                wb.close()
                 return
                 
             ws = wb[sheet_name]
@@ -268,7 +282,6 @@ class WaterTab(QWidget):
                     base = re.sub(r"\s*r\d+(\.\d+)?$", "", str(val), flags=re.IGNORECASE).strip()
                     unique_materials.add(base)
             
-            wb.close()
             
             # Clear current lists
             self.ref_list.clear()
@@ -290,7 +303,13 @@ class WaterTab(QWidget):
                     
         except Exception as e:
             QMessageBox.critical(self, "Fetch Error", f"Failed to fetch materials:\n{e}")
-        
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
         self._is_fetching = False
         self.sync_references_to_settings()
     
@@ -298,10 +317,12 @@ class WaterTab(QWidget):
         calc_mode_step3 = settings.get_setting("CALC_MODE_STEP3")
         
         if self.step3_label:
+            # Only the suffix lives in this label; "Step 3: Last 6" is the
+            # checkbox's own text.
             if calc_mode_step3 == "Last 6 Outliers Excl.":
-                self.step3_label.setText("Step 3: Last 6 <span style='color:red;'><b>Outliers Excluded</b></span>")
+                self.step3_label.setText("<span style='color:red;'><b>Outliers Excluded</b></span>")
             else:
-                self.step3_label.setText("Step 3: Last 6")
+                self.step3_label.setText("")
 
     # --- UI Logic Methods ---
     def toggle_select_all(self, state):

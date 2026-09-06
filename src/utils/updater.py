@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QVBoxLayout, QLabel, QDialog, QGridLayout, QHBoxLay
 from PyQt6.QtCore import Qt, pyqtSignal
 
 # Update this to match the tag name on your GitHub Release (e.g., "v1.0.1")
-CURRENT_VERSION = "v2.0.1"
+CURRENT_VERSION = "v2.1.0"
 GITHUB_REPO = "ibrahim-parvez/MRSI_Data_Normalization_Tool"
 
 class UpdateAvailableDialog(QDialog):
@@ -135,7 +135,7 @@ class AutoUpdater(QThread):
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
             
-            # FIX: Save the temp file to the system's temporary directory, outside the app
+            # Download into the system temp directory, outside the app bundle
             temp_dir = tempfile.gettempdir()
             filename = "MRSI_Update_New.exe" if sys.platform == "win32" else "MRSI_Update_New.zip"
             download_path = os.path.join(temp_dir, filename)
@@ -166,7 +166,7 @@ def apply_update_and_restart(download_path):
     if sys.platform == "win32":
         bat_path = os.path.join(temp_dir, "update_script.bat")
         
-        # FIX 1: Added a WaitLoop so the script keeps trying until the file unlocks
+        # The wait loop keeps retrying until the running app releases its file lock
         with open(bat_path, "w") as bat_file:
             bat_file.write(f"""@echo off
                             :WaitLoop
@@ -187,7 +187,7 @@ def apply_update_and_restart(download_path):
             creationflags=subprocess.CREATE_NO_WINDOW, 
             env=clean_env
         )
-        # FIX 2: Use os._exit(0) to instantly kill the app and release the .exe lock
+        # Exit immediately so the .exe lock is released for the updater
         os._exit(0)
 
     elif sys.platform == "darwin":
@@ -213,5 +213,5 @@ def apply_update_and_restart(download_path):
             clean_env.pop(k, None)
             
         subprocess.Popen([sh_path], start_new_session=True, env=clean_env)
-        # FIX 2: Apply to Mac as well for a clean instant kill
+        # Same immediate exit on Mac
         os._exit(0)

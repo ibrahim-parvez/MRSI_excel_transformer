@@ -6,7 +6,7 @@ from copy import copy
 import re
 from datetime import datetime
 import utils.settings as settings
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 # --- Helper Functions for He/CO2 Logic ---
 
@@ -62,8 +62,7 @@ def step6_normalization_water(file_path: str):
     wb_values = load_workbook(file_path, data_only=True)
 
     if "Group_DNT" not in wb.sheetnames:
-        print("❌ Sheet 'Group_DNT' not found.")
-        return 0
+        raise ValueError("Sheet 'Group_DNT' not found. Run Step 5 first.")
 
     group_ws = wb["Group_DNT"]
     group_values_ws = wb_values["Group_DNT"]
@@ -160,12 +159,12 @@ def step6_normalization_water(file_path: str):
         std_bold_color_map[name] = Font(color=hex_code, bold=True)
 
     # ==========================================================
-    # === Canonical Standard Naming (FIX) ======================
+    # === Canonical Standard Naming ============================
     # ==========================================================
-    # Two blocks of the SAME standard (e.g. "MRSI W1 R2" and "MRSI W1 R7")
-    # used to resolve to two DIFFERENT keys, which meant they were treated as
-    # two unrelated standards downstream. Everything now funnels through
-    # canonical_std_name() so every block of a standard lands on ONE key.
+    # Two blocks of the same standard (e.g. "MRSI W1 R2" and "MRSI W1 R7")
+    # must resolve to one key, or they are treated as two unrelated standards
+    # downstream. Everything funnels through canonical_std_name() so every
+    # block of a standard lands on the same key.
 
     def clean_match(s):
         return re.sub(r'[\s\-_]+', '', str(s)).upper().replace("STD", "")
@@ -697,8 +696,8 @@ def step6_normalization_water(file_path: str):
 
         first_id = group_values_ws.cell(row=data_start_src, column=3).value
         base_key = create_group_key(first_id)
-        # FIX: canonicalise so "MRSI W1" (block 1) and "MRSI W1" (block 2)
-        # always produce the exact same ref_base key.
+        # Canonicalise so "MRSI W1" (block 1) and "MRSI W1" (block 2)
+        # always produce the same ref_base key.
         ref_base = resolved_reference(base_key)
         group_infos.append({
             'src_data_start': data_start_src,
@@ -723,7 +722,7 @@ def step6_normalization_water(file_path: str):
         if norm_ref and norm_ref in std_color_map:
             id_color = std_color_map[norm_ref]
 
-        # --- CHANGED: Only copy columns 1 to 17 (A to Q) ---
+        # --- Only copy columns 1 to 17 (A to Q) ---
         max_col_to_copy = min(group_ws.max_column, 17)
         for col_idx in range(1, max_col_to_copy + 1):
             src_cell = group_ws.cell(row=src_r, column=col_idx)
@@ -791,7 +790,6 @@ def step6_normalization_water(file_path: str):
         if len(gis) >= 1:
             last_gi = sorted(gis, key=lambda x: (x['dst_calc_mid'] or 0))[-1]
             
-            # --- INSERTION FIX ---
             # Check for "Outlier Excl." block (located 3 rows down from mid because of gap)
             current_calc_mid = last_gi['dst_calc_mid']
             physical_block_height = 1 # Default (0..1)
@@ -845,15 +843,21 @@ def step6_normalization_water(file_path: str):
             cell.fill = yellow_fill
 
         # ==================================================================
-        # === RESTORED LOGIC: Average = AVERAGE of each block's Average ====
+        # === Average, Stdev and Count all read the individual values ======
         # ==================================================================
-        # When the same standard appears as two (or more) separate blocks,
-        # the "All" average must be the average OF THE BLOCK AVERAGES, not a
-        # pooled average of individual measurements (and definitely not just
-        # one block's average).
+        # All three formulas point at the same raw measurement cells, so the
+        # cells feeding the "All" row are visible when you click it - matching
+        # the carbonate processor and honouring the outlier mode (struck-out
+        # values are left out below).
         #
-        #   group_avg_k / group_avg_n -> one cell per block (its own Average)
-        #   k_refs / n_refs           -> every raw measurement (Stdev + Count)
+        # NOTE: this is a pooled average of every measurement. It equals the
+        # old average-of-block-averages whenever the blocks hold the same
+        # number of runs, but not when they differ - a pooled average weights
+        # the bigger block more heavily.
+        #
+        #   k_refs / n_refs           -> every raw measurement (all three)
+        #   group_avg_k / group_avg_n -> one cell per block, kept only as a
+        #                                fallback so the cell is never blank
 
         group_avg_k = []  # Carbon  block-average cells (Col K)
         group_avg_n = []  # Oxygen  block-average cells (Col N)
@@ -911,10 +915,11 @@ def step6_normalization_water(file_path: str):
                     if not use_outliers or not strike_n:
                         n_refs.append(f"N{r}")
 
-        # If a block average could not be located, fall back to the raw pool so
-        # the cell is never left blank.
-        k_avg_src = group_avg_k if group_avg_k else k_refs
-        n_avg_src = group_avg_n if group_avg_n else n_refs
+        # Prefer the individual measurements; only fall back to the block
+        # averages if there are no usable raw cells at all, so the Average
+        # cell is never left blank.
+        k_avg_src = k_refs if k_refs else group_avg_k
+        n_avg_src = n_refs if n_refs else group_avg_n
 
         # Helper to safely build formulas avoiding empty lists / #DIV/0!
         def build_avg(refs):
@@ -1043,9 +1048,7 @@ def step6_normalization_water(file_path: str):
     
     # Store ranges for the Result Box summary
     # standard_ranges      : { "StdName": [row1, row2, ...] }  (every raw row, all blocks)
-    # standard_group_avgs  : { "StdName": [avgRowBlock1, avgRowBlock2, ...] }
     standard_ranges = {} 
-    standard_group_avgs = {}
     col_N_str = get_column_letter(14)
     
     for gi in group_infos:
@@ -1053,10 +1056,10 @@ def step6_normalization_water(file_path: str):
         de = gi.get('dst_data_end')
         if not ds or not de or de < ds: continue
 
-        # FIX: use the GROUP-level canonical reference for every row in this
-        # block. Previously each row was re-resolved individually, so
-        # "MRSI W1 R2" and "MRSI W1 R7" became two separate keys and the second
-        # block simply overwrote the first in the results box.
+        # Use the group-level canonical reference for every row in this block.
+        # Re-resolving each row individually would split "MRSI W1 R2" and
+        # "MRSI W1 R7" into two keys, and the second block would overwrite the
+        # first in the results box.
         gi_ref = gi.get('ref_base')
 
         for r in range(ds, de + 1):
@@ -1120,12 +1123,8 @@ def step6_normalization_water(file_path: str):
         # --- ROW 2: STDEV ---
         summary_ws.cell(row=avg_row, column=col_S, value="STDEV").font = Font(bold=True)
 
-        # Remember WHERE this block's per-column Average lives, so the results
-        # box can average the block averages together.
         gi['dst_avg_row'] = avg_row - 1
         gi['dst_stdev_row'] = avg_row
-        if gi_ref:
-            standard_group_avgs.setdefault(gi_ref, []).append(avg_row - 1)
         
         # Calculate Per-Column Stats (Average on Top, STDEV Below)
         for group_key, col_idx in group_col_map.items():
@@ -1165,7 +1164,7 @@ def step6_normalization_water(file_path: str):
             if not ds or not de or not calc_row: continue
             if ds < 19: continue
             
-            # --- FIX: Use FormulaRule with ISNUMBER to ignore text ---
+            # --- FormulaRule with ISNUMBER so text cells are ignored ---
             
             # 1. Data Rows
             rng_L = f"{col_L}{ds}:{col_L}{de}"
@@ -1227,21 +1226,14 @@ def step6_normalization_water(file_path: str):
         target_stdev_col = cell_info['stdev_col']
         target_count_col = cell_info['count_col']
 
-        # Block-average rows for this standard (one per block of the standard)
-        block_avg_rows = standard_group_avgs.get(norm_ref, [])
-        
         # 1. FILL EVERY GROUP COLUMN (Average)
-        # RESTORED: average the per-block Averages together instead of pooling
-        # every raw row (and instead of only picking up one block).
+        # Pooled over every measurement in every block of this standard, so each
+        # row of data carries the same weight. A standard run twice as 6 rows and
+        # then 4 rows counts all 10 equally, rather than weighting the two blocks
+        # 50/50. These are the same cells the Stdev and Count below use.
         for group_key, col_idx in group_col_map.items():
             col_letter = get_column_letter(col_idx)
-            
-            if block_avg_rows:
-                # e.g. =IF(COUNT(V25,V48)=0,"",AVERAGE(V25,V48))
-                ranges_str = ",".join([f"{col_letter}{r}" for r in block_avg_rows])
-            else:
-                # Fallback: no block average row was recorded, pool the raw rows
-                ranges_str = ",".join([f"{col_letter}{r}" for r in rows])
+            ranges_str = ",".join([f"{col_letter}{r}" for r in rows])
             
             # Write AVERAGE formula
             c = summary_ws.cell(row=target_row, column=col_idx)
@@ -1297,5 +1289,5 @@ def step6_normalization_water(file_path: str):
     summary_ws.column_dimensions["J"].width = 16 
     summary_ws.column_dimensions["C"].width = 30
     
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"✅ Step 6: Normalization completed on {file_path})")

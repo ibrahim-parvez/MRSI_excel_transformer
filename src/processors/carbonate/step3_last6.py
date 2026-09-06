@@ -5,7 +5,7 @@ from openpyxl.worksheet.views import Selection
 from openpyxl.styles import PatternFill
 from openpyxl.formatting.rule import CellIsRule
 import utils.settings as settings
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 def _detect_decimal_places_from_format(fmt: str):
     """
@@ -223,5 +223,5 @@ def step3_last6_carbonate(file_path):
     # Set column widths
     ws_new.column_dimensions["Q"].width = 16 
 
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"Step 3: LAST 6 completed on {file_path}")

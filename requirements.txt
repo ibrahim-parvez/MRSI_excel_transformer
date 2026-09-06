@@ -1,0 +1,14 @@
+# Runtime dependencies for the MRSI Data Normalization Tool.
+# Build-time only: pyinstaller (see packaging/build.py).
+
+PyQt6>=6.6
+pandas>=2.0
+numpy>=1.24
+openpyxl>=3.1
+matplotlib>=3.7
+xlwings>=0.30
+requests>=2.31
+certifi>=2023.7
+
+# Windows only: excel_engine initialises COM on its worker threads.
+pywin32>=306; sys_platform == "win32"

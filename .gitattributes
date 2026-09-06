@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Never munge line endings inside binaries
+*.png binary
+*.ico binary
+*.icns binary
+*.xlsx binary
+*.xls binary

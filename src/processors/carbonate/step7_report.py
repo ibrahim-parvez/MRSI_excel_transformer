@@ -6,7 +6,8 @@ from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 # Import CellIsRule, FormulaRule to ensure all imports are available for downstream use
 from openpyxl.formatting.rule import CellIsRule, FormulaRule 
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
+from utils.excel_engine import recalculate_workbook
 
 def _is_formula_cell(cell):
     """Return True if the cell is a formula."""
@@ -19,42 +20,15 @@ def _is_formula_cell(cell):
         return False
 
 def _try_refresh_with_xlwings(path):
-    try:
-        import xlwings as xw
-    except Exception:
-        return False
+    """
+    Force a full recalculation of `path` in Excel and save it.
 
-    app = None
-    book = None
-    try:
-        app = xw.App(visible=False, add_book=False)
-        book = app.books.open(os.path.abspath(path))
-        try:
-            book.app.api.Application.CalculateFull()
-        except Exception:
-            try:
-                book.app.api.Application.Calculate()
-            except Exception:
-                try:
-                    book.app.calculate()
-                except Exception:
-                    pass
-        book.save()
-        book.close()
-        app.quit()
-        return True
-    except Exception:
-        try:
-            if book is not None:
-                book.close()
-        except Exception:
-            pass
-        try:
-            if app is not None:
-                app.quit()
-        except Exception:
-            pass
-        return False
+    Delegates to the shared Excel engine so that, during a Combine run, this
+    reuses that run's background Excel instance rather than starting and
+    quitting its own (which on Windows would taskkill the Combine instance --
+    see utils/excel_engine.py).
+    """
+    return recalculate_workbook(path, full=True)
 
 def step7_report_carbonate(file_path):
     source_sheet = "Normalization_DNT"
@@ -140,7 +114,7 @@ def step7_report_carbonate(file_path):
 
     start_row = max(1, gray_band_start - 3)
     
-    # --- 2. UPDATE: Define the source columns based on the NEW dynamic layout ---
+    # --- 2. Source columns for the dynamic layout ---
     # A=1, B=2, C=3 (Original data/identifier)
     # S=19 to end of sheet (Normalized Output data)
     source_cols = list(range(1, 4)) + list(range(19, max_col + 1)) 
@@ -272,5 +246,5 @@ def step7_report_carbonate(file_path):
     # Add Settings Popup Comment
     embed_settings_popup(ws_new, "A1")
 
-    wb_fmt.save(file_path)
+    save_workbook_atomic(wb_fmt, file_path)
     print(f"✅ Step 7: Report completed on {file_path}")

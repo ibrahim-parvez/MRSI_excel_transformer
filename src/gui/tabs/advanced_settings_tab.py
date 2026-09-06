@@ -740,7 +740,7 @@ class AdvancedSettingsTab(QWidget):
                                               ["Col C (Name)", "Col D", "Col E", "Col F (d13C)", "Col G (d18O)", "Col H", "Color"])
         self.tabs.addTab(self.carb_widget, "Carbonate")
 
-        # --- UPDATED CO2 Tab Setup ---
+        # --- CO2 Tab Setup ---
         self.co2_widget = main_window.MaterialTypeWidget("CO2", 
                                               ["Name", "", "", "d13C", "d18O CO2", "", "Color"])
         
@@ -749,9 +749,12 @@ class AdvancedSettingsTab(QWidget):
         co2_radio_layout.addWidget(QLabel("<b>CO2 Quick Switch:</b>"))
         
         self.co2_bg = QButtonGroup(self)
-        self.rb_25c = QRadioButton("25 degrees C")
-        self.rb_72c = QRadioButton("72 degrees C")
-        self.rb_custom = QRadioButton("Custom")
+        self.rb_25c = QRadioButton("25 °C")
+        self.rb_72c = QRadioButton("72 °C")
+        # No text: the editable label box below takes the place of the word
+        # "Custom", so the user can name this profile whatever they want.
+        self.rb_custom = QRadioButton("")
+        self.rb_custom.setToolTip("Custom CO2 profile (clears the preset δ¹⁸O CO2 values)")
         
         for rb in [self.rb_25c, self.rb_72c, self.rb_custom]:
             rb.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -763,6 +766,51 @@ class AdvancedSettingsTab(QWidget):
         co2_radio_layout.addWidget(self.rb_25c)
         co2_radio_layout.addWidget(self.rb_72c)
         co2_radio_layout.addWidget(self.rb_custom)
+        
+        # --- Editable label for the Custom profile ---
+        # Shows a grey "Custom" placeholder until the user types their own
+        # wording; whatever is here is what the Normalization (CO2) header says.
+        self.input_co2_custom = QLineEdit()
+        self.input_co2_custom.setFixedWidth(130)
+        self.input_co2_custom.setPlaceholderText("Custom")
+        self.input_co2_custom.setToolTip(
+            "Label for the Custom table, shown in the Normalization (CO2) header.\n"
+        )
+        self.input_co2_custom.setStyleSheet("""
+            QLineEdit:disabled {
+                background-color: #EAEAEA;
+                color: #B0B0B0;
+                border: 1px solid #D3D3D3;
+            }
+        """)
+        self.input_co2_custom.setText(str(settings.get_setting("CO2_CUSTOM_LABEL") or ""))
+        self.input_co2_custom.textChanged.connect(self._on_co2_custom_label_changed)
+        co2_radio_layout.addWidget(self.input_co2_custom)
+        
+        # Inserts a degree symbol at the cursor, so "70 ° C" is typeable
+        # without hunting for the character on the keyboard.
+        # The app-wide QPushButton rule uses "padding: 7px 12px", so the padding
+        # is overridden here and the width follows the text; a fixed narrow
+        # width would leave no room for the label.
+        self.btn_co2_degree = QPushButton("Insert °")
+        self.btn_co2_degree.setFixedHeight(24)
+        self.btn_co2_degree.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_co2_degree.setToolTip("Insert a degree symbol (°) at the cursor")
+        self.btn_co2_degree.setStyleSheet("""
+            QPushButton {
+                padding: 2px 10px;
+                font-size: 12px;
+                font-weight: bold;
+                border-radius: 4px;
+            }
+            QPushButton:disabled {
+                background-color: #EAEAEA;
+                color: #B0B0B0;
+            }
+        """)
+        self.btn_co2_degree.clicked.connect(self._insert_co2_degree_symbol)
+        co2_radio_layout.addWidget(self.btn_co2_degree)
+        
         co2_radio_layout.addStretch()
         
         self.co2_bg.idClicked.connect(self._apply_co2_profile)
@@ -775,7 +823,7 @@ class AdvancedSettingsTab(QWidget):
         
         self.tabs.addTab(self.co2_widget, "CO2")
         
-        # --- NEW Yield Tab Setup ---
+        # --- Yield Tab Setup ---
         self.yield_widget = YieldTabWidget()
         self.tabs.addTab(self.yield_widget, "Yield")
         
@@ -931,16 +979,38 @@ class AdvancedSettingsTab(QWidget):
         self.co2_widget.load_data()
         self.yield_widget.load_data()
 
+        self.input_co2_custom.blockSignals(True)
+        self.input_co2_custom.setText(str(settings.get_setting("CO2_CUSTOM_LABEL") or ""))
+        self.input_co2_custom.blockSignals(False)
+
         # Just call our new validation function to set the right radio button
         self._check_co2_profile_state()
     
+    def _on_co2_custom_label_changed(self, text):
+        """Store the user's wording for the Custom profile as they type."""
+        settings.set_setting("CO2_CUSTOM_LABEL", text.strip())
+
+    def _insert_co2_degree_symbol(self):
+        """Insert a degree symbol at the cursor and hand focus back."""
+        self.input_co2_custom.insert("°")
+        self.input_co2_custom.setFocus()
+
+    def _sync_co2_custom_input(self):
+        """The label only applies to the Custom profile, so grey the box out
+        (placeholder still visible) while 25 °C or 72 °C is active."""
+        if not hasattr(self, "input_co2_custom"):
+            return
+        is_custom = self.rb_custom.isChecked()
+        self.input_co2_custom.setEnabled(is_custom)
+        self.btn_co2_degree.setEnabled(is_custom)
+
     def _apply_co2_profile(self, btn_id):
         """Applies the selected predefined CO2 profile, or clears d18O if Custom is clicked."""
         self.co2_widget.table.blockSignals(True)
         
         if btn_id == 3:
             # Custom selected: clear all d18O CO2 (col_g) values
-            settings.set_setting("CO2_TEMP_MODE", "Custom") # <--- SAVES TO SETTINGS
+            settings.set_setting("CO2_TEMP_MODE", "Custom")
             current_co2 = settings.get_setting("REFERENCE_MATERIALS", sub_key="CO2") or []
             for mat in current_co2:
                 mat["col_g"] = ""
@@ -948,8 +1018,8 @@ class AdvancedSettingsTab(QWidget):
             self.co2_widget.load_data()
             
         elif btn_id == 1:
-            # 25 degrees C Profile
-            settings.set_setting("CO2_TEMP_MODE", "25 °C") # <--- SAVES TO SETTINGS
+            # 25 °C Profile
+            settings.set_setting("CO2_TEMP_MODE", "25 °C")
             co2_mats = [
                 {"col_c": "IAEA 603", "col_d": "", "col_e": "", "col_f": "2.46", "col_g": "7.86", "col_h": "", "color": "green"},
                 {"col_c": "LSVEC",    "col_d": "", "col_e": "", "col_f": "-46.6", "col_g": "", "col_h": "", "color": "lightblue"},
@@ -960,8 +1030,8 @@ class AdvancedSettingsTab(QWidget):
             self.co2_widget.load_data()
             
         elif btn_id == 2:
-            # 72 degrees C Profile
-            settings.set_setting("CO2_TEMP_MODE", "72 °C") # <--- SAVES TO SETTINGS
+            # 72 °C Profile
+            settings.set_setting("CO2_TEMP_MODE", "72 °C")
             co2_mats = [
                 {"col_c": "IAEA 603", "col_d": "", "col_e": "", "col_f": "2.46", "col_g": "6.26", "col_h": "", "color": "green"},
                 {"col_c": "LSVEC",    "col_d": "", "col_e": "", "col_f": "-46.6", "col_g": "", "col_h": "", "color": "lightblue"},
@@ -972,6 +1042,7 @@ class AdvancedSettingsTab(QWidget):
             self.co2_widget.load_data()
             
         self.co2_widget.table.blockSignals(False)
+        self._sync_co2_custom_input()
 
     def _check_co2_profile_state(self, item=None):
         """Monitors the table directly. If values match 72°C or 25°C exactly, select them. Otherwise, Custom."""
@@ -993,14 +1064,15 @@ class AdvancedSettingsTab(QWidget):
         # Check for 25°C Exact Match
         if vals.get("IAEA 603") == "7.86" and vals.get("NBS 18") == "-13.00" and vals.get("NBS 19") == "8.03":
             self.rb_25c.setChecked(True)
-            settings.set_setting("CO2_TEMP_MODE", "25 °C") # <--- SAVES TO SETTINGS
+            settings.set_setting("CO2_TEMP_MODE", "25 °C")
         # Check for 72°C Exact Match
         elif vals.get("IAEA 603") == "6.26" and vals.get("NBS 18") == "-14.56" and vals.get("NBS 19") == "6.43":
             self.rb_72c.setChecked(True)
-            settings.set_setting("CO2_TEMP_MODE", "72 °C") # <--- SAVES TO SETTINGS
+            settings.set_setting("CO2_TEMP_MODE", "72 °C")
         # Any deviation triggers Custom
         else:
             self.rb_custom.setChecked(True)
-            settings.set_setting("CO2_TEMP_MODE", "Custom") # <--- SAVES TO SETTINGS
+            settings.set_setting("CO2_TEMP_MODE", "Custom")
             
         self.co2_bg.blockSignals(False)
+        self._sync_co2_custom_input()

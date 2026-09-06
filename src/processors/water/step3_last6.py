@@ -6,7 +6,7 @@ from openpyxl.styles import PatternFill, Font
 from openpyxl.formatting.rule import CellIsRule
 from copy import copy
 import utils.settings as settings
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 def step3_last6_water(file_path: str):
     """
@@ -136,5 +136,5 @@ def step3_last6_water(file_path: str):
     # Set column widths
     new_ws.column_dimensions["O"].width = 16 
     
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"✅ Step 3: '{new_sheet_name}' created (Filter: {fixed_filter}).")

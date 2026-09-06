@@ -22,6 +22,8 @@ import matplotlib.dates as mdates
 
 from PyQt6.QtCore import QThread, pyqtSignal
 import utils.settings as settings
+from utils.common_utils import save_workbook_atomic
+from utils.excel_engine import ExcelEngine, set_shared_engine, clear_shared_engine
 
 # ---- Import carbonate modules ----
 from processors.carbonate.step1_data import step1_data_carbonate
@@ -82,6 +84,28 @@ class CarbonateCombineWorker(QThread):
                 return std_name
         return None
 
+    def _is_reference_section_end(self, ws, row, max_col):
+        """
+        True once `row` marks the end of the reference-material section.
+
+        Step 6 closes that section with a two-row dark grey band and then
+        repeats the column headers above the samples. Both have an empty
+        Identifier column, so the caller's "stop at the next non-reference
+        identifier" rule cannot see them.
+        """
+        # a) the dark grey divider band Step 6 draws across the sheet
+        for c in range(1, min(max_col, 5) + 1):
+            rgb = getattr(ws.cell(row=row, column=c).fill.start_color, "rgb", None)
+            if not (isinstance(rgb, str) and rgb.endswith("808080")):
+                break
+        else:
+            return True
+
+        # b) the repeated header row: column A holds text ("Row"/"Line") where
+        #    a real measurement row holds its run number.
+        first = ws.cell(row=row, column=1).value
+        return isinstance(first, str) and first.strip() != ""
+
     def parse_timestamp(self, ts_val):
         if isinstance(ts_val, datetime):
             return ts_val
@@ -97,7 +121,7 @@ class CarbonateCombineWorker(QThread):
     def run(self):
         # Temp dir must always be created now to store the matplotlib generated images
         temp_dir = tempfile.mkdtemp(prefix="mrsi_combine_tmp_")
-        app = None
+        engine = None
         master_ref_settings_carb = None
         master_ref_settings_co2 = None
         original_yield = None
@@ -139,15 +163,18 @@ class CarbonateCombineWorker(QThread):
                 self.log.emit("Working on temporary copies to protect originals.", "white")
 
             self.log.emit("Starting background Excel engine...", "white")
-            app = xw.App(visible=False, add_book=False)
-            app.display_alerts = False
+            engine = ExcelEngine(log=lambda msg: self.log.emit(msg, "white"), keep_alive=True)
+            # Publish the engine so the step processors that also need Excel
+            # (Step 2 To Sort, Step 7 Report) reuse this instance instead of
+            # starting and quitting their own. On Windows, quitting a second
+            # instance force-kills this one via xlwings' zombie sweep.
+            # See utils/excel_engine.py.
+            set_shared_engine(engine)
+            engine.app  # start Excel now, so a failure is reported up front
 
             def local_refresh(file_path):
-                wb = app.books.open(os.path.abspath(file_path))
-                wb.app.calculate()
-                time.sleep(1.0)
-                wb.save()
-                wb.close()
+                # Restarts Excel and retries automatically if the instance dies.
+                engine.refresh(file_path, settle=1.0)
 
             for idx, file_info in enumerate(files_data):
                 if not self._is_running: return self.stopped_early.emit()
@@ -294,7 +321,10 @@ class CarbonateCombineWorker(QThread):
                                     file_blocks[current_mat]['timestamp'] = ts
                         else:
                             recording = False
-                            
+                    elif recording and self._is_reference_section_end(ws, r, max_col_to_copy):
+                        # Blank Identifier, but the standard's block has ended.
+                        recording = False
+
                     if recording:
                         row_cells = [ws.cell(row=r, column=c) for c in range(1, max_col_to_copy + 1)] 
                         file_blocks[current_mat]['rows'].append(row_cells)
@@ -760,7 +790,7 @@ class CarbonateCombineWorker(QThread):
 
                 ws_out.cell(row=max_mpl_chart_row + mpl_row_spacing + 5, column=1).value = " "
 
-            out_wb.save(output_path)
+            save_workbook_atomic(out_wb, output_path)
             self.log.emit("-" * 50, "white")
             self.log.emit(f"✅ Combine Complete! Saved to: {output_path}", "green")
             
@@ -798,11 +828,9 @@ class CarbonateCombineWorker(QThread):
                 settings.set_setting("CALC_CO2", original_co2)
             # =========================================================================
 
-            if app:
-                try:
-                    app.quit()
-                except:
-                    pass
+            if engine is not None:
+                clear_shared_engine(engine)
+                engine.shutdown()
                     
             if temp_dir and os.path.exists(temp_dir):
                 try:

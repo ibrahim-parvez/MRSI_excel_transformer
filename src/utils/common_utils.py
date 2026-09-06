@@ -1,6 +1,54 @@
+import errno
+import os
+import shutil
+import tempfile
+
 from openpyxl.comments import Comment
 from openpyxl.styles import Font, Alignment
 import utils.settings as settings
+
+
+def save_workbook_atomic(wb, file_path):
+    """
+    Save `wb` to `file_path` without ever leaving a half-written file behind.
+
+    openpyxl's own save opens the destination with ZipFile(..., "w"), which
+    truncates it immediately. If the write then fails - disk full, a USB or
+    network drive disappearing, a crash, a force-quit - the user's workbook is
+    left truncated and unopenable.
+
+    Writing to a temporary file in the SAME directory and then os.replace()-ing
+    it into position makes the swap atomic: the destination is either the old
+    file or the complete new one, never a partial one. Same directory matters,
+    because os.replace is only atomic within one filesystem.
+    """
+    file_path = os.path.abspath(file_path)
+    folder = os.path.dirname(file_path) or "."
+
+    # os.replace() only needs write permission on the DIRECTORY, so without
+    # this check a read-only workbook would be silently overwritten - which the
+    # plain openpyxl save could never do. Fail the same way it used to.
+    if os.path.exists(file_path) and not os.access(file_path, os.W_OK):
+        raise PermissionError(errno.EACCES, "Permission denied", file_path)
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".dnt_save_", suffix=".xlsx", dir=folder)
+    os.close(fd)
+    try:
+        wb.save(tmp_path)
+        # mkstemp creates the file 0600; keep whatever permissions the
+        # original had so the saved file does not become owner-only.
+        if os.path.exists(file_path):
+            try:
+                shutil.copymode(file_path, tmp_path)
+            except OSError:
+                pass
+        os.replace(tmp_path, file_path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 # Map the UI labels to their actual backend values
 #sigma_opts = [("1σ", 1), ("2σ", 2), ("3σ", 3)]
@@ -78,6 +126,10 @@ def embed_settings_popup(ws, cell_coordinate="AB1", show_popup=True):
         
     if calc_co2:
         co2_temp = config.get('CO2_TEMP_MODE', 'Custom')
+        if co2_temp == "Custom":
+            custom_label = str(config.get('CO2_CUSTOM_LABEL') or "").strip()
+            if custom_label:
+                co2_temp = f"Custom ({custom_label})"
         clean_text += (
             "\n\n--- CO2 Settings ---\n"
             f"  • Temp Mode: {co2_temp}"

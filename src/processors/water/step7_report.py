@@ -4,46 +4,30 @@ from copy import copy
 from openpyxl import load_workbook
 from openpyxl.worksheet.views import Selection
 from openpyxl.utils import get_column_letter
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
+from utils.excel_engine import recalculate_workbook
 
 # --- Helper: Force Excel to Calculate Formulas ---
 def _try_refresh_with_xlwings(path):
     """
-    Opens the workbook in the background using Excel, 
-    calculates all formulas, and saves it. 
-    """
-    try:
-        import xlwings as xw
-    except ImportError:
-        return False
+    Opens the workbook in the background using Excel,
+    calculates all formulas, and saves it.
 
-    app = None
-    book = None
-    try:
-        app = xw.App(visible=False, add_book=False)
-        book = app.books.open(os.path.abspath(path))
-        book.app.api.Application.CalculateFull()
-        book.save()
-        book.close()
-        app.quit()
-        return True
-    except Exception as e:
-        print(f"⚠️ xlwings refresh failed: {e}")
-        try:
-            if book: book.close()
-            if app: app.quit()
-        except: pass
-        return False
+    Delegates to the shared Excel engine so that, during a Combine run, this
+    reuses that run's background Excel instance rather than starting and
+    quitting its own (which on Windows would taskkill the Combine instance --
+    see utils/excel_engine.py).
+    """
+    return recalculate_workbook(path, full=True)
 
 def step7_report_water(file_path):
     source_sheet = "Normalization_DNT"
     new_sheet_name = "Report_DNT"
 
     if not os.path.exists(file_path):
-        print(f"❌ File not found: {file_path}")
-        return
+        raise FileNotFoundError(f"File not found: {file_path}")
 
-    # 1. Force Calculation Redundant Step
+    # 1. Force recalculation (handled by the shared Excel engine instead)
     #print("⏳ Recalculating formulas with Excel...")
     #_try_refresh_with_xlwings(file_path)
 
@@ -53,8 +37,7 @@ def step7_report_water(file_path):
     wb_val = load_workbook(file_path, data_only=True)
 
     if source_sheet not in wb_fmt.sheetnames:
-        print(f"❌ Sheet '{source_sheet}' not found.")
-        return
+        raise ValueError(f"Sheet '{source_sheet}' not found. Run Step 6 first.")
 
     ws_fmt = wb_fmt[source_sheet]
     ws_val = wb_val[source_sheet]
@@ -236,5 +219,5 @@ def step7_report_water(file_path):
     # Add Settings Popup Comment
     embed_settings_popup(ws_new, "A1")
 
-    wb_fmt.save(file_path)
+    save_workbook_atomic(wb_fmt, file_path)
     print(f"✅ Step 7: Water Report completed on {file_path}")

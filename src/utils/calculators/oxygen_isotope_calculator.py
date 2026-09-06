@@ -224,8 +224,8 @@ class OxygenIsotopeCalculator:
 """
 Sample Usage
 
-# Import the file you just saved above
-import isotope_calculator as iso
+# Import this module
+import oxygen_isotope_calculator as iso
 
 # ==========================================
 # EXAMPLE USAGE

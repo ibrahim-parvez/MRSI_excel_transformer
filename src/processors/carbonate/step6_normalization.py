@@ -9,9 +9,10 @@ import re
 import unicodedata
 import statistics
 import utils.settings as settings
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.worksheet.formula import ArrayFormula
+from openpyxl.worksheet.views import Selection
 
 # --- Helper Functions ---
 def _normalize_text(text):
@@ -21,6 +22,13 @@ def _normalize_text(text):
     text = unicodedata.normalize("NFKD", text)
     text = re.sub(r"[^A-Za-z0-9]+", "", text)
     return text.lower().strip()
+
+# Yield colour code, shared by the Yield table and the Theoretical column:
+# green marks the compound used for reference materials, pink the one used
+# for samples. Everything else in the Yield table stays black.
+YIELD_REF_COLOR = "00B050"   # green
+YIELD_SAMP_COLOR = "FF66B2"  # pink
+
 
 def create_rich_text(parts):
     rt = CellRichText()
@@ -41,7 +49,7 @@ def get_subscript_label(main_text, sub_text, base_font=None):
 
 def get_co2_temp_label():
     """Retrieves dynamic temperature text from settings for CO2 normalization."""
-    # We now fetch the exact string saved by the UI
+    # Use the exact string saved by the UI
     mode = settings.get_setting("CO2_TEMP_MODE")
     
     if mode == "72 °C":
@@ -49,7 +57,9 @@ def get_co2_temp_label():
     elif mode == "25 °C":
         return "Using 25 °C"
     elif mode == "Custom":
-        return "Using Custom Temp"
+        # Whatever the user typed in the Advanced Settings CO2 box, e.g. "70 °C"
+        custom = str(settings.get_setting("CO2_CUSTOM_LABEL") or "").strip()
+        return f"Using {custom}" if custom else "Using Custom Temp"
         
     # Absolute fallback just in case settings fail to load completely
     return "Using 25 °C"
@@ -178,8 +188,8 @@ def draw_blue_box_structure(ws, offset_col=0, setting_key="Carbonate", box_fill=
 
     # Setup Subscripts for Carbonate vs CO2
     if setting_key == "Carbonate":
-        ws.cell(row=3, column=6 + offset_col).value = get_subscript_label("δ¹³C", "Carbonate")
-        ws.cell(row=3, column=7 + offset_col, value="δ¹⁸O")
+        ws.cell(row=3, column=6 + offset_col, value="δ¹³C")
+        ws.cell(row=3, column=7 + offset_col).value = get_subscript_label("δ¹⁸O", "Carbonate")
     else:
         ws.cell(row=3, column=6 + offset_col, value="δ¹³C")
         ws.cell(row=3, column=7 + offset_col).value = get_subscript_label("δ¹⁸O", "CO2")
@@ -262,8 +272,8 @@ def draw_blue_box_structure(ws, offset_col=0, setting_key="Carbonate", box_fill=
     ws.cell(row=2, column=10 + offset_col).alignment = center
 
     if setting_key == "Carbonate":
-        ws.cell(row=3, column=11 + offset_col).value = get_subscript_label("δ¹³C", "Carbonate")
-        ws.cell(row=3, column=14 + offset_col, value="δ¹⁸O")
+        ws.cell(row=3, column=11 + offset_col, value="δ¹³C")
+        ws.cell(row=3, column=14 + offset_col).value = get_subscript_label("δ¹⁸O", "Carbonate")
     else:
         ws.cell(row=3, column=11 + offset_col, value="δ¹³C")
         ws.cell(row=3, column=14 + offset_col).value = get_subscript_label("δ¹⁸O", "CO2")
@@ -434,7 +444,6 @@ def draw_yield_table(ws, start_col, box_fill, num_yield_groups):
             ws.cell(row=r, column=c).fill = box_fill
 
     black_bold = Font(color="000000", bold=True)
-    green_bold = Font(color="00B050", bold=True)
     thick = Side(border_style="medium", color="000000") 
     
     ws.cell(row=1, column=start_col, value="By Sang-Tae Kim (2026-0726)").font = black_bold
@@ -472,10 +481,10 @@ def draw_yield_table(ws, start_col, box_fill, num_yield_groups):
     ws.cell(row=11, column=ah_col, value="CO2")
     ws.cell(row=11, column=ai_col, value=f"={col_AI}8+({col_AI}9*2)").number_format = '0.00E+00'
     
-    ws.cell(row=12, column=ai_col, value="Mol. Weight").font = green_bold
-    ws.cell(row=12, column=start_col + 3, value="CO2 weight %").font = green_bold 
-    ws.cell(row=12, column=start_col + 5, value="Yields (umol/mg)").font = green_bold 
-    ws.cell(row=12, column=start_col + 7, value="Yields (mmol/mg)").font = green_bold 
+    ws.cell(row=12, column=ai_col, value="Mol. Weight").font = black_bold
+    ws.cell(row=12, column=start_col + 3, value="CO2 weight %").font = black_bold
+    ws.cell(row=12, column=start_col + 5, value="Yields (umol/mg)").font = black_bold
+    ws.cell(row=12, column=start_col + 7, value="Yields (mmol/mg)").font = black_bold
     
     ws.cell(row=11, column=start_col + 9, value="Target").font = black_bold
     ws.cell(row=11, column=start_col + 9).alignment = Alignment(horizontal="center")
@@ -491,22 +500,16 @@ def draw_yield_table(ws, start_col, box_fill, num_yield_groups):
     ref_comp = yield_compounds.get("ref", "CaCO3")
     samp_comp = yield_compounds.get("samp", "MnCO3")
     
-    base_colors = {
-        "CaCO3": "00B050", 
-        "MgCO3": "00B050",
-        "CaMg(CO3)2": "006633",
-        "Li2CO3": "33CC33",
-        "MnCO3": "00B050", 
-        "FeCO3": "339966"
-    }
-
     def get_fonts(comp_name):
+        """Green for the reference-material compound, pink for the sample
+        compound, black for every other compound in the table."""
         if comp_name == ref_comp:
-            return Font(color="000000", bold=True), Font(color="000000")
+            color = YIELD_REF_COLOR
         elif comp_name == samp_comp:
-            return Font(color="FF66B2", bold=True), Font(color="FF66B2")
+            color = YIELD_SAMP_COLOR
         else:
-            return Font(color=base_colors.get(comp_name, "00B050"), bold=True), Font(color="00B050")
+            color = "000000"
+        return Font(color=color, bold=True), Font(color=color)
 
     f_name_ca, f_val_ca = get_fonts("CaCO3")
     f_name_mg, f_val_mg = get_fonts("MgCO3")
@@ -617,9 +620,9 @@ def draw_upper_boxes(ws, h_row, box_fill, black_bold, green_bold, output_offset=
     for i, grp in enumerate(slope_groups):
         rt = get_rich_text_for_group(grp)
         if setting_key == "Carbonate":
-            ws.cell(h_row - 1, c_start + i).value = get_subscript_label("δ¹³C", "Carbonate")
-            ws.cell(h_row - 1, o_calc_start + i, "δ¹⁸O")
-            ws.cell(h_row - 1, o_arag_start + i, "δ¹⁸O")
+            ws.cell(h_row - 1, c_start + i, "δ¹³C")
+            ws.cell(h_row - 1, o_calc_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
+            ws.cell(h_row - 1, o_arag_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
         else:
             ws.cell(h_row - 1, c_start + i, "δ¹³C")
             ws.cell(h_row - 1, o_calc_start + i).value = get_subscript_label("δ¹⁸O", "CO2")
@@ -653,8 +656,8 @@ def draw_upper_boxes(ws, h_row, box_fill, black_bold, green_bold, output_offset=
     for i, grp in enumerate(slope_groups):
         rt = get_rich_text_for_group(grp)
         if setting_key == "Carbonate":
-            ws.cell(h_row - 1, vsmow_calc_start + i, "δ¹⁸O")
-            ws.cell(h_row - 1, vsmow_arag_start + i, "δ¹⁸O")
+            ws.cell(h_row - 1, vsmow_calc_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
+            ws.cell(h_row - 1, vsmow_arag_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
         else:
             ws.cell(h_row - 1, vsmow_calc_start + i).value = get_subscript_label("δ¹⁸O", "CO2")
             ws.cell(h_row - 1, vsmow_arag_start + i).value = get_subscript_label("δ¹⁸O", "CO2")
@@ -723,9 +726,9 @@ def draw_lower_boxes(ws, divider_top_row, box_fill, black_bold, green_bold, outp
     for i, grp in enumerate(slope_groups):
         rt = get_rich_text_for_group(grp)
         if setting_key == "Carbonate":
-            ws.cell(divider_top_row, c_start + i).value = get_subscript_label("δ¹³C", "Carbonate")
-            ws.cell(divider_top_row, o_calc_start + i, "δ¹⁸O")
-            ws.cell(divider_top_row, o_arag_start + i, "δ¹⁸O")
+            ws.cell(divider_top_row, c_start + i, "δ¹³C")
+            ws.cell(divider_top_row, o_calc_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
+            ws.cell(divider_top_row, o_arag_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
         else:
             ws.cell(divider_top_row, c_start + i, "δ¹³C")
             ws.cell(divider_top_row, o_calc_start + i).value = get_subscript_label("δ¹⁸O", "CO2")
@@ -759,8 +762,8 @@ def draw_lower_boxes(ws, divider_top_row, box_fill, black_bold, green_bold, outp
     for i, grp in enumerate(slope_groups):
         rt = get_rich_text_for_group(grp)
         if setting_key == "Carbonate":
-            ws.cell(divider_top_row, vsmow_calc_start + i, "δ¹⁸O")
-            ws.cell(divider_top_row, vsmow_arag_start + i, "δ¹⁸O")
+            ws.cell(divider_top_row, vsmow_calc_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
+            ws.cell(divider_top_row, vsmow_arag_start + i).value = get_subscript_label("δ¹⁸O", "Carbonate")
         else:
             ws.cell(divider_top_row, vsmow_calc_start + i).value = get_subscript_label("δ¹⁸O", "CO2")
             ws.cell(divider_top_row, vsmow_arag_start + i).value = get_subscript_label("δ¹⁸O", "CO2")
@@ -861,6 +864,9 @@ def step6_normalization_carbonate(file_path):
         raise ValueError("Sheet 'Last 6_DNT' not found!")
     ws_last6 = wb["Last 6_DNT"]
 
+    if "Group_DNT" not in wb.sheetnames:
+        raise ValueError("Sheet 'Group_DNT' not found. Run Step 5 first.")
+
     if "Normalization_DNT" in wb.sheetnames:
         wb.remove(wb["Normalization_DNT"])
     pre_group_index = wb.sheetnames.index("Group_DNT")
@@ -871,12 +877,6 @@ def step6_normalization_carbonate(file_path):
             s.sheet_view.tabSelected = False
         except Exception:
             pass
-            
-    try:
-        ws_last6.sheet_view.tabSelected = True
-        ws_group.sheet_view.tabSelected = False
-    except Exception:
-        pass
         
     # --- DISTINCT FILL COLORS ---
     carb_fill = _make_fill("DAE9F8")   # Classic Blue
@@ -985,8 +985,8 @@ def step6_normalization_carbonate(file_path):
             ny_cell = ws_group.cell(row=header_row - 3, column=theo_col, value="Normalized Yield")
             ny_cell.font = Font(bold=True)
             
-            # 3. "Theoretical" Header (no vertical merge)
-            theo_header = ws_group.cell(row=header_row, column=theo_col, value="Theoretical")
+            # 3. "Theoretical" Header, on the same row as the other headers
+            theo_header = ws_group.cell(row=header_row - 1, column=theo_col, value="Theoretical")
             theo_header.font = Font(bold=True, color="000000")
             
             # 4. Populate each Yield Group
@@ -1001,18 +1001,20 @@ def step6_normalization_carbonate(file_path):
                 y_head = ws_group.cell(row=header_row - 1, column=yield_pct_col, value="Yield (%)")
                 y_head.font = Font(bold=True)
                 
-                # Reference Materials underneath (merged across the 3 columns)
+                # Reference materials underneath, written once under
+                # "Calculated" and once under "Yield (%)". Not merged across
+                # the three columns, because merges break the formatting when
+                # this sheet is copied and pasted downstream.
                 rt = get_local_yield_rich_text(yield_slope_groups[i])
-                ws_group.merge_cells(start_row=header_row, start_column=calc_col, end_row=header_row, end_column=yield_pct_col)
-                rt_cell = ws_group.cell(row=header_row, column=calc_col)
-                rt_cell.value = rt
+                ws_group.cell(row=header_row, column=calc_col).value = rt
+                ws_group.cell(row=header_row, column=yield_pct_col).value = get_local_yield_rich_text(yield_slope_groups[i])
                 
                 # Ensure column widths are spacious
                 ws_group.column_dimensions[get_column_letter(calc_col)].width = 15
                 ws_group.column_dimensions[get_column_letter(yield_pct_col)].width = 15
         else:
             # Fallback if no yield groups are configured
-            theo_header = ws_group.cell(row=header_row, column=theo_col, value="Theoretical")
+            theo_header = ws_group.cell(row=header_row - 1, column=theo_col, value="Theoretical")
             theo_header.fill = yield_fill
             theo_header.font = Font(bold=True, color="000000")
             theo_header.alignment = Alignment(horizontal="center", vertical="center")
@@ -1234,6 +1236,8 @@ def step6_normalization_carbonate(file_path):
                 
                 theo_cell = ws_group.cell(row=excel_row, column=theo_col, value=f'=IF(ISNUMBER(G{excel_row}), G{excel_row}*{ref_cell}, "")')
                 theo_cell.number_format = '0.00E+00'
+                # Same colour code as the Yield table's compounds
+                theo_cell.font = Font(color=YIELD_REF_COLOR if is_reference else YIELD_SAMP_COLOR)
                 
                 for grp_idx in range(num_yield_groups):
                     calc_col = theo_col + 2 + (grp_idx * 4)
@@ -1283,7 +1287,10 @@ def step6_normalization_carbonate(file_path):
             o_up, o_low = mean_o + (outlier_sigma * stdev_o), mean_o - (outlier_sigma * stdev_o)
 
             all_runs_c = []; all_runs_o = []
-            final_runs_rows = []
+            # Carbon and Oxygen are tracked in SEPARATE lists. A single shared
+            # list of surviving rows cannot express "Individual" mode, where a
+            # run can lose its C value to an outlier but keep its O value.
+            final_runs_c = []; final_runs_o = []
 
             c_col_let = "K"; o_col_let = "N"
 
@@ -1304,7 +1311,10 @@ def step6_normalization_carbonate(file_path):
                     if is_c_out: exclude_c = True
                     if is_o_out: exclude_o = True
                 
-                if not exclude_c or not exclude_o: final_runs_rows.append(r_num)
+                # A value joins the filtered average only if it exists and was
+                # not excluded for its own column (same rule as step5_group.py).
+                if not exclude_c and vc is not None: final_runs_c.append(f"{c_col_let}{r_num}")
+                if not exclude_o and vo is not None: final_runs_o.append(f"{o_col_let}{r_num}")
                 
                 if exclude_c and vc is not None: ws_group.cell(row=r_num, column=11).font = strike_font
                 if exclude_o and vo is not None: ws_group.cell(row=r_num, column=14).font = strike_font
@@ -1369,9 +1379,9 @@ def step6_normalization_carbonate(file_path):
 
             row_filt_calc = row_filt + 1
             
-            # Reconstruct filtered ranges for C and O specifically, or use final_runs_rows for Yield
-            rng_c_filt = [f"{c_col_let}{r}" for r in final_runs_rows if f"{c_col_let}{r}" in all_runs_c]
-            rng_o_filt = [f"{o_col_let}{r}" for r in final_runs_rows if f"{o_col_let}{r}" in all_runs_o]
+            # Filtered ranges, built per column while detecting the outliers above.
+            rng_c_filt = final_runs_c
+            rng_o_filt = final_runs_o
 
             if rng_c_filt:
                 rng_c_str = ",".join(rng_c_filt)
@@ -1604,5 +1614,18 @@ def step6_normalization_carbonate(file_path):
 
     embed_settings_popup(ws_group, "A2")
 
-    wb.save(file_path)
+    # Open on Normalization_DNT with a single tab selected. Both halves matter:
+    # tabSelected marks the tab, wb.active sets the workbook's activeTab index.
+    # If they point at different sheets, Excel opens the workbook with two tabs
+    # selected as a group.
+    for s in wb.worksheets:
+        try:
+            s.sheet_view.tabSelected = False
+        except Exception:
+            pass
+    ws_group.sheet_view.tabSelected = True
+    wb.active = wb.index(ws_group)
+    ws_group.sheet_view.selection = [Selection(activeCell="A1", sqref="A1")]
+
+    save_workbook_atomic(wb, file_path)
     print(f"✅ Step 6: Normalization completed on {file_path}")

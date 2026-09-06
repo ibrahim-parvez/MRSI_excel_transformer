@@ -5,7 +5,7 @@ from openpyxl.styles import PatternFill, Font
 from openpyxl.formatting.rule import CellIsRule 
 from copy import copy
 import utils.settings as settings 
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 def step2_tosort_water(file_path: str, filter_choice: str = "Last 6"):
     """
@@ -71,7 +71,6 @@ def step2_tosort_water(file_path: str, filter_choice: str = "Last 6"):
 
     # If filter is NOT 'all', manually hide rows based on the filter
     if filter_choice_lower != 'all':
-        # ❌ REMOVED: new_ws.auto_filter.add_filter_column(14, [filter_choice]) 
         # (This was writing corrupted XML that crashed Mac Excel's AppleScript bridge)
         
         for r in range(2, last_row + 1):
@@ -125,6 +124,6 @@ def step2_tosort_water(file_path: str, filter_choice: str = "Last 6"):
     # Set column widths
     new_ws.column_dimensions["O"].width = 16 
     
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     wb.close()
     print(f"✅ Step 2: To Sort completed on {file_path} using filter '{filter_choice}'")

@@ -5,39 +5,22 @@ from copy import copy
 from openpyxl import load_workbook
 from openpyxl.worksheet.views import Selection
 from openpyxl.utils import get_column_letter
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
+from utils.excel_engine import recalculate_workbook
 
 def _try_force_excel_recalc(file_path, timeout=5.0):
     """
-    Try to open the workbook in Excel via xlwings, calculate, save and close.
-    Returns True on success, False on failure (e.g. xlwings not installed or Excel not available).
-    """
-    try:
-        import xlwings as xw
-    except Exception:
-        return False
+    Open the workbook in Excel, calculate, save and close.
+    Returns True on success, False on failure (e.g. xlwings/Excel unavailable).
 
-    app = None
-    try:
-        app = xw.App(visible=False)
-        # Give Excel a moment to start
-        time.sleep(0.2)
-        book = app.books.open(os.path.abspath(file_path))
-        # Force a full recalculation
-        book.app.calculate()
-        # Wait a little for Excel to finish (best-effort)
-        time.sleep(min(1.0, timeout))
-        book.save()
-        book.close()
-        app.quit()
-        return True
-    except Exception:
-        try:
-            if app:
-                app.quit()
-        except Exception:
-            pass
-        return False
+    Delegates to the shared Excel engine instead of starting its own instance:
+    during a Combine run this reuses the background instance that run already
+    owns. Starting a second instance here and quitting it would, on Windows,
+    force-kill the Combine instance via xlwings' zombie sweep and break the
+    rest of the run with "The RPC server is unavailable".
+    See utils/excel_engine.py.
+    """
+    return recalculate_workbook(file_path, settle=min(1.0, timeout))
 
 
 def step2_tosort_carbonate(file_path, filter_choice="Last 6"):
@@ -105,7 +88,7 @@ def step2_tosort_carbonate(file_path, filter_choice="Last 6"):
     if max_row_idx == 0 or max_col_idx == 0:
         ws_new.sheet_view.tabSelected = True
         wb.active = wb.index(ws_new)
-        wb.save(file_path)
+        save_workbook_atomic(wb, file_path)
         wb.close()
         wb_values.close()
         print(f"Step 2: TO SORT created empty sheet '{new_sheet_name}' in {file_path}")
@@ -247,7 +230,7 @@ def step2_tosort_carbonate(file_path, filter_choice="Last 6"):
 
     # Save and close workbooks securely
     try:
-        wb.save(file_path)
+        save_workbook_atomic(wb, file_path)
         wb.close()
         wb_values.close()
         print(f"✅ Step 2: To Sort completed on {file_path}")

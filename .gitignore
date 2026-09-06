@@ -1,1 +1,19 @@
-generate_hash.py
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# PyInstaller output (specs are checked in, under packaging/)
+build/
+dist/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Excel lock files left behind by interrupted runs
+~$*.xls*

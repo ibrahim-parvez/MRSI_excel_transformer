@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill, Alignment, Border
 from openpyxl.formatting.rule import CellIsRule 
 import utils.settings as settings 
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 # --- Constants & Styles ---
 fill_error = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
@@ -186,6 +186,14 @@ def step5_group_water(file_path: str):
         df['Line_num'] = pd.to_numeric(df['Line'], errors='coerce')
     else:
         df['Line_num'] = 0
+
+    # An empty groupby result has no 'min_line' column, so the sort_values calls
+    # below would fail with a bare KeyError. Say what is actually wrong instead.
+    if df.empty:
+        raise ValueError(
+            f"No data rows found in '{source_sheet_name}'. "
+            f"Check that the earlier steps produced data."
+        )
 
     group_min = df.groupby('Group_Key', sort=False)['Line_num'].min().reset_index(name='min_line')
 
@@ -445,7 +453,7 @@ def step5_group_water(file_path: str):
         else:
             new_ws.cell(row=row_filt_calc, column=14, value="--")
 
-        # Calculate Q Stats (using valid C rows as default proxy, or union? Usually follows C or O. Let's use valid_c for now)
+        # Q stats follow the valid C rows
         if valid_dest_rows_c:
              rng_q_filt = build_rng(valid_dest_rows_c, 17)
              new_ws.cell(row=row_filt_calc, column=17, value=f"=AVERAGE({rng_q_filt})").number_format = THREE_DECIMAL_FORMAT
@@ -485,5 +493,5 @@ def step5_group_water(file_path: str):
 
     new_ws.column_dimensions["J"].width = 16 
 
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"✅ Step 5: Group sheet '{new_sheet_name}'")

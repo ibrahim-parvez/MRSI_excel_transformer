@@ -6,7 +6,7 @@ from openpyxl.styles import PatternFill, Font, NamedStyle, Alignment
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.worksheet.views import Selection
 import utils.settings as settings
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 def step1_data_water(file_path, sheet_name='ExportGB2.wke', sparkline=False):
     """
@@ -20,6 +20,16 @@ def step1_data_water(file_path, sheet_name='ExportGB2.wke', sparkline=False):
     4. DUPLICATES 'Sum Area' and 'Flags' to the "Outliers Excl." row so they persist after filtering.
     """
     new_sheet_name = 'Data_DNT'
+
+    # The sheets this tool generates all end in "_DNT" and are never valid raw
+    # input. Reading from one is either a crash (Step 1 deletes 'Data_DNT'
+    # before reading it, so picking it raises "Worksheet does not exist") or
+    # silent nonsense (normalised output re-processed as raw data).
+    if str(sheet_name).strip().endswith("_DNT"):
+        raise ValueError(
+            f"'{sheet_name}' is a sheet this tool generates, not raw data. "
+            f"Choose the original data sheet from the instrument export."
+        )
     
     # --- Configuration from Settings ---
     stdev_is_enabled = settings.get_setting("STDEV_THRESHOLD_ENABLED")
@@ -114,6 +124,17 @@ def step1_data_water(file_path, sheet_name='ExportGB2.wke', sparkline=False):
     col_letter_ampl = get_column_letter(col_ampl) if col_ampl else None
     
     # Group Processing
+    # Fail with a readable message instead of a bare KeyError deep in pandas
+    # when the raw export does not have the columns this step groups on.
+    _required = ['Line', 'Time Code', 'Identifier 1']
+    _missing = [c for c in _required if c not in df.columns]
+    if _missing:
+        _found = ", ".join(str(c) for c in list(df.columns)[:15])
+        raise ValueError(
+            f"Required column(s) missing from sheet '{sheet_name}': "
+            f"{', '.join(_missing)}. Columns found: {_found}"
+        )
+
     grouped = df.groupby('Line', sort=False)
     
     calc_start_col = start_col_calc
@@ -211,7 +232,7 @@ def step1_data_water(file_path, sheet_name='ExportGB2.wke', sparkline=False):
 
         # --- Flag Messages ---
         flag_message = ""
-        # Fix logic: water usually uses fixed headers logic, but here we count actual rows
+        # Water normally relies on fixed headers, but here the actual rows are counted
         expected_rows = 11
         if num_data_rows < expected_rows: flag_message = f"<{expected_rows} ({num_data_rows})"
         elif num_data_rows > expected_rows: flag_message = f">{expected_rows} ({num_data_rows})"
@@ -387,5 +408,5 @@ def step1_data_water(file_path, sheet_name='ExportGB2.wke', sparkline=False):
     # Set column widths
     ws.column_dimensions["O"].width = 16 
         
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"✅ Step 1: DATA completed on {file_path}")

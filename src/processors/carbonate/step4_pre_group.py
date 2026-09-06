@@ -7,7 +7,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.formatting.rule import FormulaRule 
 import utils.settings as settings
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 # --- Helper Functions ---
 
@@ -75,8 +75,7 @@ def step4_pre_group_carbonate(file_path: str):
     # Find source sheet
     matched_source = next((s for s in wb.sheetnames if s.lower() == source_sheet_name.lower()), None)
     if matched_source is None:
-        print(f"❌ Source sheet matching '{source_sheet_name}' not found.")
-        return
+        raise ValueError(f"Sheet '{source_sheet_name}' not found. Run Step 3 first.")
 
     source_ws_vals = wb_values[matched_source]
     source_ws = wb[matched_source]
@@ -291,5 +290,5 @@ def step4_pre_group_carbonate(file_path: str):
     # Add Settings Popup Comment
     embed_settings_popup(new_ws, "R1")
 
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"✅ Step 4: Carbonate Pre-Group sheet '{new_sheet_name}' created.")

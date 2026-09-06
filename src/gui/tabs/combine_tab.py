@@ -690,6 +690,33 @@ class CombineTab(QWidget):
                 "samples": row_samps
             })
             
+        out_path = self.output_path_input.text().strip()
+
+        if not out_path:
+            QMessageBox.warning(self, "No Output File",
+                                "Please choose where to save the combined file.")
+            return None
+
+        # The combined workbook is written to out_path at the very END of the
+        # run. If that path is also one of the inputs, the raw file would be
+        # replaced by the combined output.
+        clashes = [os.path.basename(f["path"]) for f in file_list
+                   if f.get("path") and os.path.abspath(f["path"]) == os.path.abspath(out_path)]
+        if clashes:
+            QMessageBox.warning(self, "Output Would Overwrite an Input",
+                                f"The output file is also one of the files being processed "
+                                f"({clashes[0]}).\n\nChoose a different output file so the raw "
+                                f"data is not overwritten.")
+            return None
+
+        # Check the destination folder now rather than discovering it is missing
+        # after every file has already been processed.
+        out_dir = os.path.dirname(os.path.abspath(out_path))
+        if not os.path.isdir(out_dir):
+            QMessageBox.warning(self, "Output Folder Not Found",
+                                f"The folder for the output file does not exist:\n{out_dir}")
+            return None
+
         return {
             "mode": "water" if self.btn_water.isChecked() else "carbonate",
             "protect_originals": self.radio_temp_copy.isChecked(),

@@ -9,7 +9,7 @@ import numpy as np
 import re
 from openpyxl.formatting.rule import CellIsRule 
 import utils.settings as settings 
-from utils.common_utils import embed_settings_popup
+from utils.common_utils import embed_settings_popup, save_workbook_atomic
 
 # Define the error fill for Conditional Formatting
 fill_error = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
@@ -49,8 +49,7 @@ def step4_pre_group_water(file_path: str):
     # Find the source sheet (case-insensitive match)
     matched_source = next((s for s in wb.sheetnames if s.lower() == source_sheet_name.lower()), None)
     if matched_source is None:
-        print(f"❌ Source sheet matching '{source_sheet_name}' not found.")
-        return
+        raise ValueError(f"Sheet '{source_sheet_name}' not found. Run Step 3 first.")
 
     source_ws_vals = wb_values[matched_source]
     source_ws = wb[matched_source]
@@ -122,7 +121,7 @@ def step4_pre_group_water(file_path: str):
     
     src_row = 2
     
-    # CHANGED: Start writing at Row 3 to leave Row 2 blank
+    # Start writing at row 3 so row 2 stays blank
     dest_row = 3
     
     max_row = source_ws.max_row
@@ -250,5 +249,5 @@ def step4_pre_group_water(file_path: str):
     # Set column widths
     new_ws.column_dimensions["J"].width = 16 
 
-    wb.save(file_path)
+    save_workbook_atomic(wb, file_path)
     print(f"✅ Step 4: Pre-Grouping sheet '{new_sheet_name}' created.")

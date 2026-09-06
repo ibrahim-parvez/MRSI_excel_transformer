@@ -1,40 +1,43 @@
-import sys
-import os
-import subprocess
-import time
-import pandas as pd
-import xlwings as xw
 import hashlib
-import base64
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime
 
-from PyQt6.QtGui import QFont, QIcon, QCursor, QPainter, QColor, QPen, QAction, QKeySequence, QPixmap, QImage, QDesktopServices, QDoubleValidator
+from PyQt6.QtCore import (
+    Qt, QThread, pyqtSignal, QTimer, QPoint, QRect, QSize, QPropertyAnimation,
+    QEasingCurve, QUrl,
+)
+from PyQt6.QtGui import (
+    QFont, QCursor, QPainter, QColor, QPen, QAction, QKeySequence,
+    QDesktopServices,
+)
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QFileDialog, QTabWidget, QTextEdit, QCheckBox,
-    QLineEdit, QComboBox, QGroupBox, QMessageBox, QMenu, QProgressBar, QFrame,
-    QSizePolicy, QSpacerItem, QGridLayout, QTabBar, QDialog, QScrollArea, QButtonGroup, 
-    QRadioButton, QListWidget, QAbstractItemView, QTableWidget, QTableWidgetItem, QHeaderView, QLayout,
-    QToolTip, QStyleOptionGroupBox, QProgressDialog, QLabel, QStyle, QDoubleSpinBox,
+    QLabel, QFileDialog, QTextEdit, QCheckBox, QLineEdit, QComboBox, QGroupBox,
+    QMessageBox, QMenu, QProgressBar, QFrame, QSizePolicy, QTabBar, QDialog,
+    QRadioButton, QListWidget, QTableWidget, QTableWidgetItem, QHeaderView,
+    QLayout, QToolTip, QProgressDialog, QStyle,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QRect, QSize, QPropertyAnimation, QEasingCurve, QByteArray, QUrl
 
-# --- Import Settings ---
-import utils.settings as settings
-from gui.splash import StartupSplashScreen
+# ---- Tab UIs ----
 from gui.tabs.advanced_settings_tab import AdvancedSettingsTab
-
-# ---- Import Current Version and Updater ---- 
-from utils.updater import CURRENT_VERSION, AutoUpdater, apply_update_and_restart, UpdateAvailableDialog
-
-# --- Import Tab UIs ---
 from gui.tabs.carbonate_tab import CarbonateTab
 from gui.tabs.water_tab import WaterTab
-from gui.tabs.combine_tab import CombineTab
+from gui.tabs.combine_tab import CombineTab, CombineWorker
 
+# ---- Shared services ----
+import utils.settings as settings
+from utils.excel_engine import recalculate_workbook, save_workbook_as
+from utils.resources import app_icon, logo_pixmap
+from utils.updater import (
+    CURRENT_VERSION, AutoUpdater, UpdateAvailableDialog, apply_update_and_restart,
+)
 
-# ---- Import your step modules ----
-# Ensure 'steps' package exists or comment out for UI testing
-
+# ---- Pipeline steps ----
 from processors.carbonate.step1_data import step1_data_carbonate
 from processors.carbonate.step2_tosort import step2_tosort_carbonate
 from processors.carbonate.step3_last6 import step3_last6_carbonate
@@ -51,50 +54,21 @@ from processors.water.step6_normalization import step6_normalization_water
 from processors.water.step7_report import step7_report_water
 
 
-# ---- Imports for Version History ----
-import shutil
-import tempfile
-from datetime import datetime
-
-# ---- Import Current Version ---- 
-from utils.updater import CURRENT_VERSION
-
-# ---- Import Logo ----
-from utils.logo import logo_base64
-
-from gui.tabs.combine_tab import CombineWorker
-
 # ---------------- Utility: XLS → XLSX ----------------
 def convert_xls_to_xlsx(file_path):
     new_path = os.path.splitext(file_path)[0] + ".xlsx"
     try:
-        # Utilize xlwings to invoke native Excel, preserving all sheets and formatting
-        app = xw.App(visible=False)
-        app.display_alerts = False  # Suppress Excel popups (e.g., overwrite warnings)
-        
-        try:
-            # Use absolute paths which are required by Excel's COM interface
-            wb = app.books.open(os.path.abspath(file_path))
-            wb.save(os.path.abspath(new_path))
-            wb.close()
-        finally:
-            # Ensure the hidden Excel instance is completely closed even if an error occurs
-            app.quit()
-            
-        return new_path
+        # Native Excel does the conversion, preserving all sheets and formatting.
+        # Routed through the shared engine so it reuses a running Excel instance
+        # instead of starting and quitting its own - see utils/excel_engine.py.
+        return save_workbook_as(file_path, new_path)
     except Exception as e:
         raise Exception(f"XLS to XLSX conversion failed: {e}")
 
 def refresh_excel(file_path):
-    app = xw.App(visible=False)
-    try:
-        wb = app.books.open(os.path.abspath(file_path))
-        wb.app.calculate()
-        time.sleep(1)
-        wb.save()
-        wb.close()
-    finally:
-        app.quit()
+    # Shared engine: reuses a running Excel instance when there is one, and
+    # restarts Excel automatically if the COM connection has died.
+    recalculate_workbook(file_path, settle=1.0)
 
 class DragDropBox(QGroupBox):
     fileDropped = pyqtSignal(str)
@@ -285,7 +259,7 @@ class PasswordPopup(QDialog):
             self.password_input.setFocus()
 
 class AboutDialog(QDialog):
-    """A custom About dialog with a base64 logo and an inline update checker."""
+    """A custom About dialog with the MRSI logo and an inline update checker."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("About MRSI DNT")
@@ -304,21 +278,16 @@ class AboutDialog(QDialog):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        # 1. Base64 Logo
+        # 1. Logo
         self.logo_label = QLabel()
         self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        try:
-            image_data = base64.b64decode(logo_base64)
-            image = QImage.fromData(image_data)
-            pixmap = QPixmap.fromImage(image).scaled(
-                100, 100, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-            )
-            self.logo_label.setPixmap(pixmap)
-        except Exception as e:
-            # Fallback if the base64 string is invalid
+        pixmap = logo_pixmap(100)
+        if pixmap.isNull():
             self.logo_label.setText("MRSI")
             self.logo_label.setFont(QFont("Arial", 24, QFont.Weight.Bold))
             self.logo_label.setStyleSheet("color: #7A003C;")
+        else:
+            self.logo_label.setPixmap(pixmap)
         
         layout.addWidget(self.logo_label)
         layout.addSpacing(10)
@@ -589,6 +558,11 @@ class MaterialTypeWidget(QWidget):
         
         self.remove_btn = QPushButton("Remove Row")
         self.remove_btn.clicked.connect(self.remove_row)
+        # remove_row can only act on a selected row, so keep the button greyed
+        # out until there is one - otherwise clicking it silently does nothing.
+        self.remove_btn.setEnabled(False)
+        self.table.itemSelectionChanged.connect(self._update_remove_btn_state)
+        self.table.currentCellChanged.connect(lambda *a: self._update_remove_btn_state())
         
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.remove_btn)
@@ -694,11 +668,19 @@ class MaterialTypeWidget(QWidget):
         self._loading = False
         self._save_table_data()
 
+    def _update_remove_btn_state(self):
+        """Enable "Remove Row" only while a row is actually selected."""
+        try:
+            self.remove_btn.setEnabled(self.table.currentRow() >= 0)
+        except (AttributeError, RuntimeError):
+            pass
+
     def remove_row(self):
         curr = self.table.currentRow()
         if curr >= 0:
             self.table.removeRow(curr)
             self._save_table_data()
+        self._update_remove_btn_state()
 
     def add_slope_group(self):
         available = settings.get_reference_names(self.material_type)
@@ -856,11 +838,8 @@ class DataToolApp(QWidget):
         self.setMinimumSize(730, 825)
         self.resize(730, 825)
 
-        icon_pixmap = QPixmap()
-        icon_pixmap.loadFromData(QByteArray.fromBase64(logo_base64.encode('utf-8')))
-        self.setWindowIcon(QIcon(icon_pixmap))
+        self.setWindowIcon(app_icon())
 
-        
         self.file_path = None
         self.tab_files = {0: None, 1: None}
         self.current_tab_index = 0
@@ -1014,7 +993,7 @@ class DataToolApp(QWidget):
         
         self.init_ui()
         
-        # --- KEYBOARD SHORTCUT (Robust Fix using QAction) ---
+        # --- Keyboard shortcut (QAction attaches to the window reliably) ---
         # We use QAction because it attaches to the window more reliably than QShortcut.
         self.unlock_action = QAction(self)
         
@@ -1207,18 +1186,7 @@ class DataToolApp(QWidget):
         
         # 1. Setup the Logo
         logo_label = QLabel()
-        
-        # Decode base64 and load into QPixmap
-        pixmap = QPixmap()
-        pixmap.loadFromData(QByteArray.fromBase64(logo_base64.encode('utf-8')))
-        
-        # Scale to 70x70 smoothly
-        pixmap = pixmap.scaled(
-            70, 70, 
-            Qt.AspectRatioMode.KeepAspectRatio, 
-            Qt.TransformationMode.SmoothTransformation
-        )
-        logo_label.setPixmap(pixmap)
+        logo_label.setPixmap(logo_pixmap(70))
         logo_label.setFixedSize(70, 70)
 
         def open_mcmaster_website(event):
@@ -1249,7 +1217,7 @@ class DataToolApp(QWidget):
 
         title.mousePressEvent = open_mrsi_website
 
-        # Optional: Make the mouse cursor turn into a pointing hand when hovering over it.
+        # Pointing-hand cursor on hover
         # If you want it to be a 100% secret "Easter egg" link, just leave this next line out!
         #title.setCursor(Qt.CursorShape.PointingHandCursor)
         
@@ -1308,7 +1276,7 @@ class DataToolApp(QWidget):
         self.menu_btn.clicked.connect(self.show_menu)
         self.menu_btn.longPressed.connect(self.trigger_secret_unlock)
 
-        # ---- History Button (NEW) ----
+        # ---- History Button ----
         self.history_btn = QPushButton("↺", self)
         self.history_btn.setProperty("flat", True)
         self.history_btn.setFixedSize(36, 36)
@@ -1329,9 +1297,9 @@ class DataToolApp(QWidget):
         QTimer.singleShot(0, self.position_header_buttons)
         
         # ==========================================================
-        # ==== UPDATED FILE SELECTION BOX (DRAG & DROP) ===========
+        # ==== FILE SELECTION BOX (DRAG & DROP) ===================
         # ==========================================================
-        self.file_box = DragDropBox("File Selection") # <--- Changed to custom class
+        self.file_box = DragDropBox("File Selection")
         self.file_box.setObjectName("fileGroup")
         
         # Connect the drop signal
@@ -1404,7 +1372,7 @@ class DataToolApp(QWidget):
         self.tab_bar = QTabBar()
         self.tab_bar.addTab("Water")
         self.tab_bar.addTab("Carbonate")
-        self.combine_tab_index = -1  # <--- Added tracker
+        self.combine_tab_index = -1
         self.advanced_tab_index = -1
         
         self.tab_bar.setExpanding(False)
@@ -1539,12 +1507,17 @@ class DataToolApp(QWidget):
     #             self.advanced_tab_index = self.tab_bar.addTab("Advanced Settings")
 
     def update_lock_state(self):
+        # The visible lock button is commented out in _create_ui, so every
+        # reference to it is guarded. Un-comment the button to make it live.
+        lock_btn = getattr(self, "lock_btn", None)
+
         if self.is_locked:
-            self.lock_btn.setText("🔒")
-            self.lock_btn.setStyleSheet("""
-                QPushButton { background-color: #808080; color: white; border-radius: 18px; font-size: 18px; padding: 4px 0; }
-                QPushButton:hover { background-color: #808080; }
-            """)
+            if lock_btn is not None:
+                lock_btn.setText("🔒")
+                lock_btn.setStyleSheet("""
+                    QPushButton { background-color: #808080; color: white; border-radius: 18px; font-size: 18px; padding: 4px 0; }
+                    QPushButton:hover { background-color: #808080; }
+                """)
             if self.tab_bar.currentIndex() in [self.advanced_tab_index, self.combine_tab_index]:
                 self.tab_bar.setCurrentIndex(0)
             
@@ -1555,11 +1528,12 @@ class DataToolApp(QWidget):
                 self.tab_bar.removeTab(self.combine_tab_index)
                 self.combine_tab_index = -1
         else:
-            self.lock_btn.setText("🔓")
-            self.lock_btn.setStyleSheet("""
-                QPushButton { background-color: #FF9800; color: white; border-radius: 18px; font-size: 18px; padding: 4px 0; }
-                QPushButton:hover { background-color: #F57C00; }
-            """)
+            if lock_btn is not None:
+                lock_btn.setText("🔓")
+                lock_btn.setStyleSheet("""
+                    QPushButton { background-color: #FF9800; color: white; border-radius: 18px; font-size: 18px; padding: 4px 0; }
+                    QPushButton:hover { background-color: #F57C00; }
+                """)
             if self.combine_tab_index == -1:
                 self.combine_tab_index = self.tab_bar.addTab("Combine Data")
             if self.advanced_tab_index == -1:
@@ -1631,7 +1605,7 @@ class DataToolApp(QWidget):
                 # 3. Set state to Locked and show bubble
                 self.is_locked = True
                 
-                # --- UPDATED: Use Toast instead of Popup ---
+                # --- Toast instead of a popup ---
                 self.show_toast("🔐 Settings Re-Locked")
                 return
 
@@ -2113,11 +2087,11 @@ class DataToolApp(QWidget):
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.start_update_download(download_url)
             else:
-                # Optional: Let them know the update was skipped
+                # Let the user know the update was skipped
                 if hasattr(self, 'show_toast'):
                     self.show_toast("Update postponed.")
         else:
-            # --- NEW CLEAN BANNER/TOAST ---
+            # --- Banner / toast ---
             msg = f"You are running the latest version ({CURRENT_VERSION})."
             if hasattr(self, 'show_toast'):
                 self.show_toast(msg)
@@ -2170,36 +2144,3 @@ class DataToolApp(QWidget):
             if hasattr(self.advanced_settings_tab, 'yield_widget'):
                 self.advanced_settings_tab.yield_widget.refresh_slope_ui()
 
-"""     
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-
-    # 1. Show Splash Screen
-    splash = StartupSplashScreen()
-    splash.show()
-
-    # 2. Simulate Loading (The "Minimum 1 Second" Logic)
-    # We use a loop and processEvents() to keep the animation smooth 
-    # while delaying the main window slightly.
-    
-    start_time = time.time()
-    while time.time() - start_time < 1.5:  # Adjust 1.5 to make it longer/shorter
-        app.processEvents() # Keeps the GUI responsive
-        
-        # Calculate fake progress based on time passed
-        elapsed = time.time() - start_time
-        progress = int((elapsed / 1.5) * 100) 
-        splash.update_progress(progress)
-        
-        time.sleep(0.01) # Small sleep to prevent CPU hogging
-
-    # 3. Load Main Window
-    # (Real imports happen here or happened above, but the user sees the splash now)
-    win = DataToolApp()
-    
-    # 4. Swap Windows
-    splash.close()
-    win.show()
-    
-    sys.exit(app.exec())
-    """
